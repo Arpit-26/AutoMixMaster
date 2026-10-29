@@ -170,6 +170,23 @@ public:
         return c;
     }
 
+    // Helper: RBJ 2nd-Order All-Pass Filter (Flat magnitude, phase shift)
+    static BiquadCoeffs makeAllPass(double sampleRate, double freqHz, double q) noexcept {
+        const double omega = 2.0 * std::numbers::pi * freqHz / sampleRate;
+        const double sn = std::sin(omega);
+        const double cs = std::cos(omega);
+        const double alpha = sn / (2.0 * std::max(0.01, q));
+
+        const double a0 = 1.0 + alpha;
+        BiquadCoeffs c;
+        c.b0 = (1.0 - alpha) / a0;
+        c.b1 = (-2.0 * cs) / a0;
+        c.b2 = (1.0 + alpha) / a0;
+        c.a1 = (-2.0 * cs) / a0;
+        c.a2 = (1.0 - alpha) / a0;
+        return c;
+    }
+
 private:
     BiquadCoeffs coeffs;
     double z1 = 0.0;

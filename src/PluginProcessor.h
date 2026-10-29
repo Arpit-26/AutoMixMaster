@@ -8,6 +8,10 @@
 #include "dsp/SpectralAnalyzer.h"
 #include "dsp/SpatialAnalyzer.h"
 #include "dsp/MasterChain.h"
+#include "dsp/mix/TrackNodeTypes.h"
+#include "dsp/mix/InterPluginBus.h"
+#include "dsp/mix/SourceChainProcessor.h"
+#include "dsp/mix/StemClassifier.h"
 
 class AutoMixMasterProcessor : public juce::AudioProcessor {
 public:
@@ -52,12 +56,43 @@ public:
     void setProcessingEnabled(bool enabled) noexcept { processingEnabled = enabled; }
     [[nodiscard]] bool isProcessingEnabled() const noexcept { return processingEnabled; }
 
+    // Milestone 2: Dual Operating Mode (MasterBus vs TrackNode)
+    void setOperatingMode(dsp::mix::PluginOperatingMode mode) noexcept {
+        operatingMode = mode;
+    }
+    [[nodiscard]] dsp::mix::PluginOperatingMode getOperatingMode() const noexcept {
+        return operatingMode;
+    }
+
+    void setTrackClass(dsp::mix::TrackClass tClass) noexcept {
+        trackClass = tClass;
+        sourceChain.setTrackClass(tClass);
+    }
+    [[nodiscard]] dsp::mix::TrackClass getTrackClass() const noexcept {
+        return trackClass;
+    }
+
+    void setTrackName(const juce::String& name) noexcept {
+        trackName = name;
+        if (trackClass == dsp::mix::TrackClass::Unknown) {
+            trackClass = dsp::mix::StemClassifier::classifyFromTrackName(name.toStdString());
+            sourceChain.setTrackClass(trackClass);
+        }
+    }
+    [[nodiscard]] const juce::String& getTrackName() const noexcept { return trackName; }
+
+    dsp::mix::SourceChainProcessor& getSourceChain() noexcept { return sourceChain; }
+    const dsp::mix::SourceChainProcessor& getSourceChain() const noexcept { return sourceChain; }
+
+    [[nodiscard]] int getInterPluginSlot() const noexcept { return interPluginSlot; }
+
     void resetAnalyzers() noexcept {
         loudnessMeter.reset();
         truePeakMeter.reset();
         spectralAnalyzer.reset();
         spatialAnalyzer.reset();
         masterChain.reset();
+        sourceChain.reset();
         fifoBuffer.clear();
         fifoWritePos = 0;
     }
@@ -68,6 +103,14 @@ private:
     double currentSampleRate = 48000.0;
     std::atomic<bool> sidechainActive { false };
     bool processingEnabled = true;
+
+    // Milestone 2 Mode & Stem Chain
+    dsp::mix::PluginOperatingMode  operatingMode = dsp::mix::PluginOperatingMode::MasterBus;
+    dsp::mix::TrackClass           trackClass = dsp::mix::TrackClass::Unknown;
+    juce::String                   trackName;
+    dsp::mix::SourceChainProcessor sourceChain;
+    int                            interPluginSlot = -1;
+    juce::AudioBuffer<float>       tempSidechainBuffer;
 
     // 10-Stage Mastering Chain
     dsp::MasterChain     masterChain;

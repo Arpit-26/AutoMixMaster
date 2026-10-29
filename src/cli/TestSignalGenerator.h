@@ -45,6 +45,31 @@ public:
     }
 
     /**
+     * Calibrate an audio buffer to exact RMS level in dBFS.
+     */
+    static void calibrateToTargetRMS(juce::AudioBuffer<float>& buffer, float targetRmsDbFS) {
+        const int numChannels = buffer.getNumChannels();
+        const int numSamples = buffer.getNumSamples();
+        if (numSamples == 0 || numChannels == 0) return;
+
+        double sumSq = 0.0;
+        for (int ch = 0; ch < numChannels; ++ch) {
+            const float* p = buffer.getReadPointer(ch);
+            for (int i = 0; i < numSamples; ++i) {
+                const double s = static_cast<double>(p[i]);
+                sumSq += s * s;
+            }
+        }
+        const double meanSq = sumSq / static_cast<double>(numChannels * numSamples);
+        const double measuredRms = std::sqrt(std::max(1.0e-9, meanSq));
+        const double measuredRmsDb = 20.0 * std::log10(measuredRms);
+
+        const double gainDeltaDb = static_cast<double>(targetRmsDbFS) - measuredRmsDb;
+        const float gainLinear = static_cast<float>(std::pow(10.0, gainDeltaDb / 20.0));
+        buffer.applyGain(gainLinear);
+    }
+
+    /**
      * Generates a stereo audio buffer of durationSeconds at sampleRate.
      * targetDbFS specifies the target LUFS when calibrated.
      */
@@ -281,6 +306,207 @@ public:
             }
         }
 
+        return buffer;
+    }
+
+    /**
+     * Generates a punchy mono Kick stem at -6.0 dBFS RMS (un-gain-staged).
+     * 120 BPM with 60 Hz punch and 4 kHz click snap.
+     */
+    static juce::AudioBuffer<float> generateKickStem(double sampleRate, double durationSeconds, float targetRmsDbFS = -6.0f) {
+        const int numSamples = static_cast<int>(std::round(sampleRate * durationSeconds));
+        juce::AudioBuffer<float> buffer(2, numSamples);
+        buffer.clear();
+
+        std::mt19937 rng(42);
+        std::uniform_real_distribution<float> noiseDist(-1.0f, 1.0f);
+        const int beatInterval = static_cast<int>(std::round(sampleRate * 0.5)); // 120 BPM
+
+        for (int i = 0; i < numSamples; ++i) {
+            const int posInBeat = i % beatInterval;
+            float val = 0.0f;
+            if (posInBeat < static_cast<int>(sampleRate * 0.15)) {
+                const double t = static_cast<double>(posInBeat) / sampleRate;
+                const double env = std::exp(-t / 0.040);
+                const double phase = 2.0 * std::numbers::pi * 60.0 * t;
+                val = 0.85f * static_cast<float>(std::sin(phase) * env);
+
+                // Transient click snap (3ms at 4 kHz)
+                if (t < 0.003) {
+                    val += 0.35f * noiseDist(rng) * static_cast<float>(1.0 - t / 0.003);
+                }
+            }
+            buffer.setSample(0, i, val);
+            buffer.setSample(1, i, val);
+        }
+
+        calibrateToTargetRMS(buffer, targetRmsDbFS);
+        return buffer;
+    }
+
+    /**
+     * Generates a loud 808 Sub-Bass stem at -4.0 dBFS RMS (un-gain-staged).
+     * 60 Hz tone with 180° inverted phase (destructive cancellation with Kick) and a +5 dB 250 Hz mud buildup.
+     */
+    static juce::AudioBuffer<float> generate808Stem(double sampleRate, double durationSeconds, float targetRmsDbFS = -4.0f) {
+        const int numSamples = static_cast<int>(std::round(sampleRate * durationSeconds));
+        juce::AudioBuffer<float> buffer(2, numSamples);
+        buffer.clear();
+
+        const int beatInterval = static_cast<int>(std::round(sampleRate * 0.5));
+        double phaseMud250 = 0.0;
+
+        for (int i = 0; i < numSamples; ++i) {
+            const int posInBeat = i % beatInterval;
+            const double t = static_cast<double>(posInBeat) / sampleRate;
+
+            // 808 note envelope (sustained 350 ms decay)
+            double subEnv = 0.25;
+            if (posInBeat < static_cast<int>(sampleRate * 0.40)) {
+                subEnv = 0.80 * std::exp(-t / 0.15);
+            }
+
+            // 60 Hz tone with 180° phase inversion (-sin)
+            const double phase = 2.0 * std::numbers::pi * 60.0 * t;
+            const float subVal = static_cast<float>(-std::sin(phase) * subEnv); // 180° inverted!
+
+            // 250 Hz mud buildup (+5 dB stationary peak)
+            phaseMud250 += 2.0 * std::numbers::pi * 250.0 / sampleRate;
+            if (phaseMud250 >= 2.0 * std::numbers::pi) phaseMud250 -= 2.0 * std::numbers::pi;
+            const float mudVal = 0.35f * static_cast<float>(std::sin(phaseMud250));
+
+            const float total = subVal + mudVal;
+            buffer.setSample(0, i, total);
+            buffer.setSample(1, i, total);
+        }
+
+        calibrateToTargetRMS(buffer, targetRmsDbFS);
+        return buffer;
+    }
+
+    /**
+     * Generates a buried Lead Vocal stem at -24.0 dBFS RMS (un-gain-staged).
+     * Vocal formants at 1-3 kHz with 7.5 kHz harsh sibilance bursts.
+     */
+    static juce::AudioBuffer<float> generateLeadVocalStem(double sampleRate, double durationSeconds, float targetRmsDbFS = -24.0f) {
+        const int numSamples = static_cast<int>(std::round(sampleRate * durationSeconds));
+        juce::AudioBuffer<float> buffer(2, numSamples);
+        buffer.clear();
+
+        std::mt19937 rng(999);
+        std::uniform_real_distribution<float> noiseDist(-1.0f, 1.0f);
+
+        double p800 = 0.0, p1500 = 0.0, p2800 = 0.0, p7500 = 0.0;
+        const int phraseCycle = static_cast<int>(std::round(sampleRate * 2.0)); // 1.5s active, 0.5s pause
+        const int activeDuration = static_cast<int>(std::round(sampleRate * 1.5));
+        const int sibInterval = static_cast<int>(std::round(sampleRate * 0.6)); // Sibilance every 600ms
+
+        for (int i = 0; i < numSamples; ++i) {
+            const int posInPhrase = i % phraseCycle;
+            float val = 0.0f;
+
+            if (posInPhrase < activeDuration) {
+                // Vowel formant harmonics
+                p800 += 2.0 * std::numbers::pi * 880.0 / sampleRate;
+                p1500 += 2.0 * std::numbers::pi * 1760.0 / sampleRate;
+                p2800 += 2.0 * std::numbers::pi * 2640.0 / sampleRate;
+                if (p800 >= 2.0 * std::numbers::pi) p800 -= 2.0 * std::numbers::pi;
+                if (p1500 >= 2.0 * std::numbers::pi) p1500 -= 2.0 * std::numbers::pi;
+                if (p2800 >= 2.0 * std::numbers::pi) p2800 -= 2.0 * std::numbers::pi;
+
+                const float formant = 0.40f * static_cast<float>(std::sin(p800)) +
+                                      0.35f * static_cast<float>(std::sin(p1500)) +
+                                      0.25f * static_cast<float>(std::sin(p2800));
+
+                // 7.5 kHz harsh sibilance burst ("s" / "t" sound)
+                float sibilance = 0.0f;
+                const int posInSib = i % sibInterval;
+                if (posInSib < static_cast<int>(sampleRate * 0.060)) { // 60ms sibilance
+                    p7500 += 2.0 * std::numbers::pi * 7500.0 / sampleRate;
+                    if (p7500 >= 2.0 * std::numbers::pi) p7500 -= 2.0 * std::numbers::pi;
+                    const double sibEnv = std::sin(std::numbers::pi * posInSib / (sampleRate * 0.060));
+                    sibilance = 0.70f * static_cast<float>(sibEnv * (0.6 * std::sin(p7500) + 0.4 * noiseDist(rng)));
+                }
+
+                val = formant + sibilance;
+            }
+
+            buffer.setSample(0, i, val);
+            buffer.setSample(1, i, val);
+        }
+
+        calibrateToTargetRMS(buffer, targetRmsDbFS);
+        return buffer;
+    }
+
+    /**
+     * Generates a loud stereo Synth Pad stem at -10.0 dBFS RMS (un-gain-staged).
+     * Wide chorus pad wall centered at 1 kHz - 4 kHz masking the lead vocal,
+     * accompanied by musical stereo air wash and cymbal shimmer.
+     */
+    static juce::AudioBuffer<float> generateSynthPadStem(double sampleRate, double durationSeconds, float targetRmsDbFS = -10.0f) {
+        const int numSamples = static_cast<int>(std::round(sampleRate * durationSeconds));
+        juce::AudioBuffer<float> buffer(2, numSamples);
+        buffer.clear();
+
+        std::mt19937 rng(1337);
+        std::uniform_real_distribution<float> noiseDist(-1.0f, 1.0f);
+        std::array<float, 5> pinkStateL = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        std::array<float, 5> pinkStateR = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        auto nextPink = [&](std::array<float, 5>& state) -> float {
+            const float white = noiseDist(rng);
+            state[0] = 0.99886f * state[0] + white * 0.0555179f;
+            state[1] = 0.99332f * state[1] + white * 0.0750759f;
+            state[2] = 0.96900f * state[2] + white * 0.1538520f;
+            state[3] = 0.86650f * state[3] + white * 0.3104856f;
+            state[4] = 0.55000f * state[4] + white * 0.5329522f;
+            return (state[0] + state[1] + state[2] + state[3] + state[4] + white * 0.5362f) * 0.15f;
+        };
+
+        // Rich harmonic pad chord cluster centered at 1-4 kHz masking lead vocal
+        const std::array<double, 6> freqs = {
+            1174.66, 1396.91, 1760.00, 2093.00, 2637.02, 3135.96
+        };
+        const std::array<float, 6> weights = {
+            0.20f, 0.20f, 0.18f, 0.18f, 0.14f, 0.12f
+        };
+        std::array<double, 6> phasesL {};
+        std::array<double, 6> phasesR {};
+        phasesL.fill(0.0);
+        phasesR.fill(0.0);
+
+        for (int i = 0; i < numSamples; ++i) {
+            float outL = 0.0f;
+            float outR = 0.0f;
+
+            for (size_t k = 0; k < freqs.size(); ++k) {
+                // Detuned left and right for wide stereo chorus
+                const double incL = 2.0 * std::numbers::pi * (freqs[k] - 0.75) / sampleRate;
+                const double incR = 2.0 * std::numbers::pi * (freqs[k] + 0.75) / sampleRate;
+
+                phasesL[k] += incL;
+                phasesR[k] += incR;
+                if (phasesL[k] >= 2.0 * std::numbers::pi) phasesL[k] -= 2.0 * std::numbers::pi;
+                if (phasesR[k] >= 2.0 * std::numbers::pi) phasesR[k] -= 2.0 * std::numbers::pi;
+
+                outL += weights[k] * static_cast<float>(std::sin(phasesL[k]));
+                outR += weights[k] * static_cast<float>(std::sin(phasesR[k]));
+            }
+
+            // Musical stereo air wash & cymbal shimmer (>2.5 kHz commercial pink profile)
+            const float pinkL = 0.08f * nextPink(pinkStateL);
+            const float pinkR = 0.08f * nextPink(pinkStateR);
+            const float spreadL = 0.02f * noiseDist(rng);
+            const float spreadR = -spreadL;
+
+            outL += (pinkL + spreadL);
+            outR += (pinkR + spreadR);
+
+            buffer.setSample(0, i, outL);
+            buffer.setSample(1, i, outR);
+        }
+
+        calibrateToTargetRMS(buffer, targetRmsDbFS);
         return buffer;
     }
 };

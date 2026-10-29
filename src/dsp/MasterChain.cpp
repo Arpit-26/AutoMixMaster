@@ -157,12 +157,12 @@ void MasterChain::optimizeClosedLoop(const TelemetrySnapshot& inputTelemetry,
 
     if (tiltDiff > 1.5) {
         // Excess treble / deficient bass
-        lowShelfAdj = std::clamp(tiltDiff * 0.8, 0.0, 2.5);
-        highShelfAdj = std::clamp(-tiltDiff * 0.8, -2.5, 0.0);
+        lowShelfAdj = std::clamp(tiltDiff * 0.8, 0.0, 3.0);
+        highShelfAdj = std::clamp(-tiltDiff * 0.8, -3.0, 0.0);
     } else if (tiltDiff < -1.5) {
         // Excess bass / dark treble
-        lowShelfAdj = std::clamp(tiltDiff * 0.8, -2.5, 0.0);
-        highShelfAdj = std::clamp(-tiltDiff * 0.8, 0.0, 2.5);
+        lowShelfAdj = std::clamp(tiltDiff * 0.8, -3.0, 0.0);
+        highShelfAdj = std::clamp(-tiltDiff * 0.8, 0.0, 3.0);
     }
 
     // If there's an excessive mud buildup around 250 Hz (detected in spectral analysis)

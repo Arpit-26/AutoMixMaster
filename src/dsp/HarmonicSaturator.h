@@ -47,6 +47,10 @@ public:
         }
     }
 
+    void setDrive(float newDrive) noexcept {
+        setParameters(newDrive, tubeMix, tapeMix);
+    }
+
     void processBlock(float* const* channels, int numChannels, int numSamples) noexcept {
         float* chL = channels[0];
         float* chR = (numChannels > 1) ? channels[1] : channels[0];

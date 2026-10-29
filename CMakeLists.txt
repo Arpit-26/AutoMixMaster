@@ -52,6 +52,16 @@ add_library(AutoMixMaster_DSP STATIC
     src/dsp/TruePeakLimiter.cpp
     src/dsp/MasterChain.h
     src/dsp/MasterChain.cpp
+    src/dsp/mix/TrackNodeTypes.h
+    src/dsp/mix/InterPluginBus.h
+    src/dsp/mix/InterPluginBus.cpp
+    src/dsp/mix/GainStager.h
+    src/dsp/mix/PhaseRotator.h
+    src/dsp/mix/CrossAdaptiveDucker.h
+    src/dsp/mix/StemClassifier.h
+    src/dsp/mix/StemClassifier.cpp
+    src/dsp/mix/SourceChainProcessor.h
+    src/dsp/mix/SourceChainProcessor.cpp
     src/PluginProcessor.h
     src/PluginProcessor.cpp
 )
