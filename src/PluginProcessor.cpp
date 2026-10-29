@@ -26,6 +26,9 @@ bool AutoMixMasterProcessor::isBusesLayoutSupported(const BusesLayout& layouts) 
 void AutoMixMasterProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     currentSampleRate = sampleRate;
 
+    // Initialize 10-stage master chain
+    masterChain.prepare(sampleRate, samplesPerBlock);
+
     // Initialize all telemetry engines (zero allocation during processBlock)
     loudnessMeter.prepare(sampleRate, samplesPerBlock, 3600.0);
     truePeakMeter.prepare(sampleRate, 2, dsp::TruePeakMode::Mastering_Kaiser_128Tap);
@@ -37,11 +40,12 @@ void AutoMixMasterProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     fifoBuffer.clear();
     fifoWritePos = 0;
 
-    // Report exact oversampling interpolation delay to FL Studio PDC (16 samples at 4x for 128 taps)
-    setLatencySamples(16);
+    // Report exact lookahead limiter delay to FL Studio PDC
+    setLatencySamples(masterChain.getLatencySamples());
 }
 
 void AutoMixMasterProcessor::releaseResources() {
+    masterChain.reset();
     loudnessMeter.reset();
     truePeakMeter.reset();
     spectralAnalyzer.reset();
@@ -67,19 +71,24 @@ void AutoMixMasterProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
         sidechainActive.store(false, std::memory_order_relaxed);
     }
 
-    // 2. Push input samples into pre-allocated circular ring buffer
-    const float* const inL = mainBus.getReadPointer(0);
-    const float* const inR = (mainBus.getNumChannels() > 1) ? mainBus.getReadPointer(1) : inL;
+    // 2. Process audio through 10-Stage Master Chain if enabled
+    if (processingEnabled) {
+        masterChain.processBlock(mainBus.getArrayOfWritePointers(), mainBus.getNumChannels(), numSamples);
+    }
+
+    // 3. Push processed samples into pre-allocated circular ring buffer
+    const float* const outL = mainBus.getReadPointer(0);
+    const float* const outR = (mainBus.getNumChannels() > 1) ? mainBus.getReadPointer(1) : outL;
 
     for (int i = 0; i < numSamples; ++i) {
-        fifoBuffer.setSample(0, fifoWritePos, inL[i]);
-        fifoBuffer.setSample(1, fifoWritePos, inR[i]);
+        fifoBuffer.setSample(0, fifoWritePos, outL[i]);
+        fifoBuffer.setSample(1, fifoWritePos, outR[i]);
         fifoWritePos = (fifoWritePos + 1) % kInternalFifoCapacity;
     }
 
-    const float* const channelPointers[2] = { inL, inR };
+    const float* const channelPointers[2] = { outL, outR };
 
-    // 3. Process Telemetry Engines
+    // 4. Process Telemetry Engines
     loudnessMeter.processBlock(channelPointers, 2, numSamples);
     truePeakMeter.processBlock(channelPointers, 2, numSamples);
     spectralAnalyzer.processBlock(channelPointers, 2, numSamples);
@@ -117,6 +126,13 @@ dsp::TelemetrySnapshot AutoMixMasterProcessor::getTelemetrySnapshot() const noex
 
     // Sidechain
     snap.sidechainActive = sidechainActive.load(std::memory_order_relaxed);
+
+    // Mastering Stage Metrics
+    snap.limiterGainReduction_dB = masterChain.getLimiterGainReduction_dB();
+    snap.glueGainReduction_dB    = masterChain.getGlueGainReduction_dB();
+    snap.softClipperShave_dB     = masterChain.getSoftClipperShave_dB();
+    snap.lowBandGainReduction_dB = masterChain.getLowBandGainReduction_dB();
+    snap.dynamicResonanceCut_dB  = masterChain.getResonanceMaxCut_dB();
 
     return snap;
 }

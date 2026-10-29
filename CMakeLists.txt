@@ -39,6 +39,19 @@ add_library(AutoMixMaster_DSP STATIC
     src/dsp/SpectralAnalyzer.cpp
     src/dsp/SpatialAnalyzer.h
     src/dsp/SpatialAnalyzer.cpp
+    src/dsp/InputStage.h
+    src/dsp/CorrectiveEQ.h
+    src/dsp/MixBusGlueCompressor.h
+    src/dsp/LowBandDynamicProcessor.h
+    src/dsp/StereoWidthEnforcer.h
+    src/dsp/HarmonicSaturator.h
+    src/dsp/TonalBalanceEQ.h
+    src/dsp/DynamicResonanceSuppressor.h
+    src/dsp/OversampledSoftClipper.h
+    src/dsp/TruePeakLimiter.h
+    src/dsp/TruePeakLimiter.cpp
+    src/dsp/MasterChain.h
+    src/dsp/MasterChain.cpp
     src/PluginProcessor.h
     src/PluginProcessor.cpp
 )

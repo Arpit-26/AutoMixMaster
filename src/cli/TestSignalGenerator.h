@@ -13,6 +13,7 @@ class TestSignalGenerator {
 public:
     enum class SignalType {
         CalibratedMasterTrack,
+        FlawedUnmasteredInput,
         Sine1kHz,
         PinkNoise,
         OutPhaseBass60Hz,
@@ -118,6 +119,81 @@ public:
 
                 // Normalization pass
                 calibrateToTargetLUFS(buffer, sampleRate, static_cast<double>(targetDbFS));
+                break;
+            }
+
+            case SignalType::FlawedUnmasteredInput: {
+                // 10-second intentionally flawed unmastered mix:
+                // - Quiet overall (-19.5 LUFS)
+                // - Out-of-phase stereo sub-bass below 120 Hz causing > 2.5 dB mono-sum loss
+                // - Loose sub-bass peaks (high <250 Hz crest factor) and a +5 dB mud buildup at 250 Hz
+                // - Harsh resonant spike at 3.5 kHz
+                // - Uncontrolled drum transients
+                std::mt19937 rng(1337);
+                std::uniform_real_distribution<float> noiseDist(-1.0f, 1.0f);
+
+                std::array<float, 5> pinkState = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+                auto nextPink = [&]() -> float {
+                    const float white = noiseDist(rng);
+                    pinkState[0] = 0.99886f * pinkState[0] + white * 0.0555179f;
+                    pinkState[1] = 0.99332f * pinkState[1] + white * 0.0750759f;
+                    pinkState[2] = 0.96900f * pinkState[2] + white * 0.1538520f;
+                    pinkState[3] = 0.86650f * pinkState[3] + white * 0.3104856f;
+                    pinkState[4] = 0.55000f * pinkState[4] + white * 0.5329522f;
+                    return (pinkState[0] + pinkState[1] + pinkState[2] + pinkState[3] + pinkState[4] + white * 0.5362f) * 0.15f;
+                };
+
+                const int beatInterval = static_cast<int>(std::round(sampleRate * 0.5)); // 120 BPM
+                double subPhase = 0.0;
+                double mudPhase = 0.0;
+                double harshPhase = 0.0;
+
+                for (int i = 0; i < numSamples; ++i) {
+                    const int posInBeat = i % beatInterval;
+
+                    // 1. Spiky uncontrolled transient drum bursts (fast 5ms decay)
+                    float drumClick = 0.0f;
+                    if (posInBeat < static_cast<int>(sampleRate * 0.06)) {
+                        const double env = std::exp(-static_cast<double>(posInBeat) / (sampleRate * 0.012));
+                        drumClick = 0.85f * static_cast<float>(env * noiseDist(rng));
+                    }
+
+                    // 2. Out-of-phase stereo 60 Hz sub-bass (180 deg inverted phase -> cancels completely in mono!)
+                    subPhase += 2.0 * std::numbers::pi * 60.0 / sampleRate;
+                    if (subPhase >= 2.0 * std::numbers::pi) subPhase -= 2.0 * std::numbers::pi;
+
+                    // Dynamic 808 bursts with high crest factor (~14 dB)
+                    float subEnv = 0.08f;
+                    if (posInBeat < static_cast<int>(sampleRate * 0.3)) {
+                        subEnv = 0.65f * static_cast<float>(std::exp(-static_cast<double>(posInBeat) / (sampleRate * 0.08)));
+                    }
+                    const float subTone = subEnv * static_cast<float>(std::sin(subPhase));
+                    const float subL = subTone;
+                    const float subR = -subTone; // 180 degrees out of phase! (L + R) = 0!
+
+                    // 3. +5 dB mud buildup at 250 Hz (narrow stationary peak)
+                    mudPhase += 2.0 * std::numbers::pi * 250.0 / sampleRate;
+                    if (mudPhase >= 2.0 * std::numbers::pi) mudPhase -= 2.0 * std::numbers::pi;
+                    const float mudVal = 0.18f * static_cast<float>(std::sin(mudPhase));
+
+                    // 4. Harsh resonant spike at 3.5 kHz (piercing sibilance whistle)
+                    harshPhase += 2.0 * std::numbers::pi * 3500.0 / sampleRate;
+                    if (harshPhase >= 2.0 * std::numbers::pi) harshPhase -= 2.0 * std::numbers::pi;
+                    const float harshVal = 0.15f * static_cast<float>(std::sin(harshPhase));
+
+                    // 5. Baseline musical bed with -4.5 dB/oct commercial tilt
+                    const float pinkBed = 0.16f * nextPink();
+                    const float pinkSpread = 0.02f * noiseDist(rng);
+
+                    const float outL = drumClick + subL + mudVal + harshVal + (pinkBed + pinkSpread);
+                    const float outR = drumClick + subR + mudVal + harshVal + (pinkBed - pinkSpread);
+
+                    buffer.setSample(0, i, outL);
+                    buffer.setSample(1, i, outR);
+                }
+
+                // Calibrate unmastered mix to exactly -19.5 LUFS
+                calibrateToTargetLUFS(buffer, sampleRate, -19.5);
                 break;
             }
 

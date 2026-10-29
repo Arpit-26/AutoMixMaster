@@ -1,6 +1,7 @@
 #pragma once
 #include <cmath>
 #include <numbers>
+#include <algorithm>
 
 namespace dsp {
 
@@ -74,6 +75,96 @@ public:
         c.b0 = ((1.0 + cs) * 0.5) / a0;
         c.b1 = -(1.0 + cs) / a0;
         c.b2 = ((1.0 + cs) * 0.5) / a0;
+        c.a1 = (-2.0 * cs) / a0;
+        c.a2 = (1.0 - alpha) / a0;
+        return c;
+    }
+
+    // Helper: RBJ Parametric Peak / Bell EQ
+    static BiquadCoeffs makePeakEQ(double sampleRate, double freqHz, double q, double gainDb) noexcept {
+        const double A = std::pow(10.0, gainDb / 40.0);
+        const double omega = 2.0 * std::numbers::pi * freqHz / sampleRate;
+        const double sn = std::sin(omega);
+        const double cs = std::cos(omega);
+        const double alpha = sn / (2.0 * std::max(0.01, q));
+
+        const double a0 = 1.0 + alpha / A;
+        BiquadCoeffs c;
+        c.b0 = (1.0 + alpha * A) / a0;
+        c.b1 = (-2.0 * cs) / a0;
+        c.b2 = (1.0 - alpha * A) / a0;
+        c.a1 = (-2.0 * cs) / a0;
+        c.a2 = (1.0 - alpha / A) / a0;
+        return c;
+    }
+
+    // Helper: RBJ Low Shelf Filter
+    static BiquadCoeffs makeLowShelf(double sampleRate, double freqHz, double q, double gainDb) noexcept {
+        const double A = std::pow(10.0, gainDb / 40.0);
+        const double omega = 2.0 * std::numbers::pi * freqHz / sampleRate;
+        const double sn = std::sin(omega);
+        const double cs = std::cos(omega);
+        const double alpha = sn / (2.0 * std::max(0.01, q));
+        const double beta = 2.0 * std::sqrt(A) * alpha;
+
+        const double a0 = (A + 1.0) + (A - 1.0) * cs + beta;
+        BiquadCoeffs c;
+        c.b0 = (A * ((A + 1.0) - (A - 1.0) * cs + beta)) / a0;
+        c.b1 = (2.0 * A * ((A - 1.0) - (A + 1.0) * cs)) / a0;
+        c.b2 = (A * ((A + 1.0) - (A - 1.0) * cs - beta)) / a0;
+        c.a1 = (-2.0 * ((A - 1.0) + (A + 1.0) * cs)) / a0;
+        c.a2 = ((A + 1.0) + (A - 1.0) * cs - beta) / a0;
+        return c;
+    }
+
+    // Helper: RBJ High Shelf Filter
+    static BiquadCoeffs makeHighShelf(double sampleRate, double freqHz, double q, double gainDb) noexcept {
+        const double A = std::pow(10.0, gainDb / 40.0);
+        const double omega = 2.0 * std::numbers::pi * freqHz / sampleRate;
+        const double sn = std::sin(omega);
+        const double cs = std::cos(omega);
+        const double alpha = sn / (2.0 * std::max(0.01, q));
+        const double beta = 2.0 * std::sqrt(A) * alpha;
+
+        const double a0 = (A + 1.0) - (A - 1.0) * cs + beta;
+        BiquadCoeffs c;
+        c.b0 = (A * ((A + 1.0) + (A - 1.0) * cs + beta)) / a0;
+        c.b1 = (-2.0 * A * ((A - 1.0) + (A + 1.0) * cs)) / a0;
+        c.b2 = (A * ((A + 1.0) + (A - 1.0) * cs - beta)) / a0;
+        c.a1 = (2.0 * ((A - 1.0) - (A + 1.0) * cs)) / a0;
+        c.a2 = ((A + 1.0) - (A - 1.0) * cs - beta) / a0;
+        return c;
+    }
+
+    // Helper: RBJ Surgical Notch Filter
+    static BiquadCoeffs makeNotch(double sampleRate, double freqHz, double q) noexcept {
+        const double omega = 2.0 * std::numbers::pi * freqHz / sampleRate;
+        const double sn = std::sin(omega);
+        const double cs = std::cos(omega);
+        const double alpha = sn / (2.0 * std::max(0.01, q));
+
+        const double a0 = 1.0 + alpha;
+        BiquadCoeffs c;
+        c.b0 = 1.0 / a0;
+        c.b1 = (-2.0 * cs) / a0;
+        c.b2 = 1.0 / a0;
+        c.a1 = (-2.0 * cs) / a0;
+        c.a2 = (1.0 - alpha) / a0;
+        return c;
+    }
+
+    // Helper: RBJ Band-Pass Filter (constant 0 dB peak gain)
+    static BiquadCoeffs makeBandPass(double sampleRate, double freqHz, double q) noexcept {
+        const double omega = 2.0 * std::numbers::pi * freqHz / sampleRate;
+        const double sn = std::sin(omega);
+        const double cs = std::cos(omega);
+        const double alpha = sn / (2.0 * std::max(0.01, q));
+
+        const double a0 = 1.0 + alpha;
+        BiquadCoeffs c;
+        c.b0 = alpha / a0;
+        c.b1 = 0.0;
+        c.b2 = -alpha / a0;
         c.a1 = (-2.0 * cs) / a0;
         c.a2 = (1.0 - alpha) / a0;
         return c;

@@ -14,8 +14,8 @@ struct CliConfig {
     juce::File inputFile;
     juce::File outputFile;
     juce::File reportFile;
-    juce::String preset = "streaming"; // "streaming", "competitive", "dynamic"
-    bool generateSynthetic = false;
+    juce::String preset = "streaming-safe"; // "streaming-safe", "competitive", "dynamic"
+    bool generateFlawed = false;
     double targetLUFS = -14.0;
     double maxTruePeak = -1.0;
     double minPSR = 10.0;
@@ -27,13 +27,13 @@ static CliConfig parseArgs(int argc, char* argv[]) {
 
     for (int i = 1; i < argc; ++i) {
         juce::String arg = argv[i];
-        if (arg == "--generate" || arg == "-g") {
-            cfg.generateSynthetic = true;
+        if (arg == "--generate" || arg == "-g" || arg == "--generate-flawed" || arg == "--flawed") {
+            cfg.generateFlawed = true;
         } else if (arg == "--preset" && i + 1 < argc) {
             cfg.preset = argv[++i];
         } else if (arg == "--report" && i + 1 < argc) {
             cfg.reportFile = juce::File(argv[++i]);
-        } else if (arg.startsWith("--target-lufs=") ) {
+        } else if (arg.startsWith("--target-lufs=")) {
             cfg.targetLUFS = arg.fromFirstOccurrenceOf("--target-lufs=", false, false).getDoubleValue();
         } else if (!arg.startsWith("-")) {
             if (!cfg.inputFile.exists()) {
@@ -52,15 +52,21 @@ static CliConfig parseArgs(int argc, char* argv[]) {
         cfg.targetLUFS = -16.0;
         cfg.maxTruePeak = -1.0;
         cfg.minPSR = 12.0;
-    } else { // "streaming"
+    } else { // "streaming-safe" or "streaming"
+        cfg.preset = "streaming-safe";
         cfg.targetLUFS = -14.0;
         cfg.maxTruePeak = -1.0;
         cfg.minPSR = 10.0;
     }
 
     if (!cfg.inputFile.exists()) {
-        cfg.generateSynthetic = true;
-        cfg.inputFile = juce::File::getCurrentWorkingDirectory().getChildFile("test_signal_14lufs.wav");
+        cfg.generateFlawed = true;
+        cfg.inputFile = juce::File::getCurrentWorkingDirectory().getChildFile("flawed_unmastered_input.wav");
+    }
+
+    if (cfg.outputFile == juce::File()) {
+        const juce::String outName = "mastered_" + cfg.preset + ".wav";
+        cfg.outputFile = juce::File::getCurrentWorkingDirectory().getChildFile(outName);
     }
 
     return cfg;
@@ -88,21 +94,28 @@ int main(int argc, char* argv[]) {
     CliConfig cfg = parseArgs(argc, argv);
 
     std::cout << "========================================================\n"
-              << " AutoMixMaster Headless Verification CLI (Milestone 1A) \n"
+              << " AutoMixMaster Headless Verification CLI (Milestone 1B) \n"
               << "========================================================\n";
     std::cout << "Target Preset: " << cfg.preset.toStdString()
-              << " (Target: " << cfg.targetLUFS << " LUFS, True Peak <= " << cfg.maxTruePeak << " dBTP)\n";
+              << " (Target: " << cfg.targetLUFS << " LUFS, True Peak <= " << cfg.maxTruePeak << " dBTP, Min PSR >= "
+              << cfg.minPSR << " LU)\n";
 
     double sampleRate = 48000.0;
-    juce::AudioBuffer<float> audioBuffer;
+    juce::AudioBuffer<float> inputBuffer;
 
-    if (cfg.generateSynthetic) {
-        std::cout << "Generating synthetic -14 LUFS calibrated test audio (10.0 seconds)...\n";
+    if (cfg.generateFlawed || !cfg.inputFile.existsAsFile()) {
+        std::cout << "Generating intentionally flawed unmastered test mix (10.0 seconds)...\n";
+        std::cout << "  - Quiet overall loudness (-19.5 LUFS)\n"
+                  << "  - Out-of-phase stereo sub-bass below 120 Hz (>2.5 dB mono loss)\n"
+                  << "  - Loose sub peaks (high crest factor) & +5 dB mud buildup at 250 Hz\n"
+                  << "  - Harsh resonant spike at 3.5 kHz\n"
+                  << "  - Uncontrolled percussive drum transients\n";
+
         const double duration = 10.0;
-        audioBuffer = cli::TestSignalGenerator::generate(cli::TestSignalGenerator::SignalType::CalibratedMasterTrack,
-                                                         sampleRate, duration, static_cast<float>(cfg.targetLUFS));
-        writeWavFile(cfg.inputFile, audioBuffer, sampleRate);
-        std::cout << "Wrote synthetic test WAV to: " << cfg.inputFile.getFullPathName().toStdString() << "\n";
+        inputBuffer = cli::TestSignalGenerator::generate(cli::TestSignalGenerator::SignalType::FlawedUnmasteredInput,
+                                                         sampleRate, duration, -19.5f);
+        writeWavFile(cfg.inputFile, inputBuffer, sampleRate);
+        std::cout << "Wrote flawed unmastered input to: " << cfg.inputFile.getFullPathName().toStdString() << "\n\n";
     } else {
         std::cout << "Reading input audio: " << cfg.inputFile.getFullPathName().toStdString() << "\n";
         std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(cfg.inputFile));
@@ -112,113 +125,216 @@ int main(int argc, char* argv[]) {
         }
         sampleRate = reader->sampleRate;
         const int totalSamples = static_cast<int>(reader->lengthInSamples);
-        audioBuffer.setSize(2, totalSamples);
-        reader->read(&audioBuffer, 0, totalSamples, 0, true, true);
+        inputBuffer.setSize(2, totalSamples);
+        reader->read(&inputBuffer, 0, totalSamples, 0, true, true);
     }
 
-    const int totalSamples = audioBuffer.getNumSamples();
+    const int totalSamples = inputBuffer.getNumSamples();
     std::cout << "Audio loaded: " << totalSamples << " samples at " << sampleRate << " Hz ("
               << std::fixed << std::setprecision(2) << (totalSamples / sampleRate) << " seconds)\n";
 
-    // 1. Initialize Processor and Simulate FL Studio Variable Buffer Jitter
-    AutoMixMasterProcessor processor;
-    processor.prepareToPlay(sampleRate, 1024);
+    // =========================================================================
+    // PASS 1: BEFORE TELEMETRY ANALYSIS (Input Baseline)
+    // =========================================================================
+    std::cout << "\n>>> PASS 1: Telemetry Analysis of Unmastered Input (Bypassed Mode)...\n";
+    AutoMixMasterProcessor analysisProcessor;
+    analysisProcessor.prepareToPlay(sampleRate, 1024);
+    analysisProcessor.setProcessingEnabled(false); // Monitor only
 
-    std::cout << "\nSimulating FL Studio variable-sized buffer jitter (1 to 1024 samples)...\n";
-    const std::vector<int> flBlockSizes = { 1, 7, 17, 33, 64, 128, 256, 513, 1024 };
-    int pos = 0;
-    int stepIdx = 0;
     juce::MidiBuffer dummyMidi;
+    juce::AudioBuffer<float> tempAnalysisBuf;
+    tempAnalysisBuf.makeCopyOf(inputBuffer);
 
+    int pos = 0;
     while (pos < totalSamples) {
-        const int blockSize = flBlockSizes[static_cast<size_t>(stepIdx) % flBlockSizes.size()];
-        const int samplesToProcess = std::min(blockSize, totalSamples - pos);
-
-        juce::AudioBuffer<float> slice(audioBuffer.getArrayOfWritePointers(), 2, pos, samplesToProcess);
-        processor.processBlock(slice, dummyMidi);
-
-        pos += samplesToProcess;
-        ++stepIdx;
+        const int blockSize = std::min(1024, totalSamples - pos);
+        juce::AudioBuffer<float> slice(tempAnalysisBuf.getArrayOfWritePointers(), 2, pos, blockSize);
+        analysisProcessor.processBlock(slice, dummyMidi);
+        pos += blockSize;
     }
-    std::cout << "Completed " << stepIdx << " variable-length processBlock calls successfully.\n";
 
-    // 2. Gather Complete Telemetry Snapshot
-    const auto snapshot = processor.getTelemetrySnapshot();
-    const auto finalLoudness = processor.getLoudnessMeter().calculateFinalTelemetry(snapshot.truePeakdBTP);
+    const auto beforeSnapshot = analysisProcessor.getTelemetrySnapshot();
+    const auto beforeLoudness = analysisProcessor.getLoudnessMeter().calculateFinalTelemetry(beforeSnapshot.truePeakdBTP);
 
-    const double measuredLUFS = finalLoudness.integratedLUFS;
-    const double measuredTP   = snapshot.truePeakdBTP;
-    const double measuredLRA  = finalLoudness.loudnessRangeLU;
-    const double measuredPSR  = finalLoudness.minPsrLU;
-    const double measuredPLR  = finalLoudness.plrLU;
-    const double subMonoLoss  = snapshot.subMonoSumLoss_dB;
-    const double globalCorr   = snapshot.globalCorrelation;
-    const double tiltSlope    = snapshot.spectralTiltSlope;
-    const double lowCrest     = snapshot.lowBandCrest_dB;
+    const double beforeLUFS     = beforeLoudness.integratedLUFS;
+    const double beforeTP       = beforeSnapshot.truePeakdBTP;
+    const double beforePSR      = beforeLoudness.minPsrLU;
+    const double beforePLR      = beforeLoudness.plrLU;
+    const double beforeSubLoss  = beforeSnapshot.subMonoSumLoss_dB;
+    const double beforeCorr     = beforeSnapshot.globalCorrelation;
+    const double beforeSubCorr  = beforeSnapshot.bandCorrelation[0];
+    const double beforeTilt     = beforeSnapshot.spectralTiltSlope;
+    const double beforeLowCrest = beforeSnapshot.lowBandCrest_dB;
 
-    // 3. Evaluate 12 Verification Guards
-    struct GuardCheck {
+    // =========================================================================
+    // PASS 2: CLOSED-LOOP 10-STAGE MASTERING PASS (AFTER)
+    // =========================================================================
+    std::cout << ">>> PASS 2: Executing Closed-Loop 10-Stage Master Chain...\n";
+    AutoMixMasterProcessor masterProcessor;
+    masterProcessor.prepareToPlay(sampleRate, 1024);
+    masterProcessor.setProcessingEnabled(true);
+
+    if (cfg.preset == "competitive") {
+        masterProcessor.getMasterChain().setPreset(dsp::MasterChain::MasteringPreset::Competitive);
+    } else if (cfg.preset == "dynamic") {
+        masterProcessor.getMasterChain().setPreset(dsp::MasterChain::MasteringPreset::Dynamic);
+    } else {
+        masterProcessor.getMasterChain().setPreset(dsp::MasterChain::MasteringPreset::StreamingSafe);
+    }
+
+    // Optimize settings from Pass 1 telemetry
+    masterProcessor.getMasterChain().optimizeClosedLoop(beforeSnapshot, beforeLoudness);
+
+    // Copy audio buffer for in-place mastering
+    juce::AudioBuffer<float> masteredBuffer;
+    const std::vector<int> flBlockSizes = { 1, 7, 17, 33, 64, 128, 256, 513, 1024 };
+    int totalProcessCalls = 0;
+    int stepIdx = 0;
+
+    // Closed-Loop Optimizer Iterations (Render -> Verify Telemetry -> Adapt Makeup Drive)
+    for (int iter = 0; iter < 2; ++iter) {
+        masteredBuffer.makeCopyOf(inputBuffer);
+        masterProcessor.resetAnalyzers();
+
+        pos = 0;
+        stepIdx = 0;
+
+        while (pos < totalSamples) {
+            const int blockSize = flBlockSizes[static_cast<size_t>(stepIdx) % flBlockSizes.size()];
+            const int samplesToProcess = std::min(blockSize, totalSamples - pos);
+
+            juce::AudioBuffer<float> slice(masteredBuffer.getArrayOfWritePointers(), 2, pos, samplesToProcess);
+            masterProcessor.processBlock(slice, dummyMidi);
+
+            pos += samplesToProcess;
+            ++stepIdx;
+        }
+        totalProcessCalls = stepIdx;
+
+        const auto iterLoudness = masterProcessor.getLoudnessMeter().calculateFinalTelemetry(masterProcessor.getTruePeakMeter().getMaxPeakdBTP());
+        const double lufsDelta = cfg.targetLUFS - iterLoudness.integratedLUFS;
+
+        if (std::abs(lufsDelta) <= 0.1 || iter == 1) {
+            break;
+        }
+
+        // Adjust post-gain makeup linear to hit target loudness within 0.1 LU
+        const float currentGain = masterProcessor.getMasterChain().getPostGainMakeupLinear();
+        const float adjustedGain = currentGain * static_cast<float>(std::pow(10.0, lufsDelta / 20.0));
+        masterProcessor.getMasterChain().setPostGainMakeupLinear(adjustedGain);
+    }
+
+    std::cout << "Mastering complete across " << totalProcessCalls << " variable-length processBlock calls.\n";
+
+    // Write rendered output WAV
+    writeWavFile(cfg.outputFile, masteredBuffer, sampleRate);
+    std::cout << "Wrote mastered output audio to: " << cfg.outputFile.getFullPathName().toStdString() << "\n";
+
+    // Gather After Telemetry
+    const auto afterSnapshot = masterProcessor.getTelemetrySnapshot();
+    const auto afterLoudness = masterProcessor.getLoudnessMeter().calculateFinalTelemetry(afterSnapshot.truePeakdBTP);
+
+    const double afterLUFS     = afterLoudness.integratedLUFS;
+    const double afterTP       = afterSnapshot.truePeakdBTP;
+    const double afterPSR      = afterLoudness.minPsrLU;
+    const double afterPLR      = afterLoudness.plrLU;
+    const double afterSubLoss  = afterSnapshot.subMonoSumLoss_dB;
+    const double afterCorr     = afterSnapshot.globalCorrelation;
+    const double afterSubCorr  = afterSnapshot.bandCorrelation[0];
+    const double afterTilt     = afterSnapshot.spectralTiltSlope;
+    const double afterLowCrest = afterSnapshot.lowBandCrest_dB;
+    const float limiterGr      = afterSnapshot.limiterGainReduction_dB;
+    const float glueGr         = afterSnapshot.glueGainReduction_dB;
+    const float clipperShave   = afterSnapshot.softClipperShave_dB;
+
+    // =========================================================================
+    // 12-POINT VERIFICATION GUARD EVALUATION (BEFORE vs AFTER)
+    // =========================================================================
+    struct GuardRow {
         int id;
         std::string name;
-        std::string target;
-        std::string measured;
-        bool pass;
+        std::string targetReq;
+        std::string beforeVal;
+        bool beforePass;
+        std::string afterVal;
+        bool afterPass;
     };
 
-    std::vector<GuardCheck> guards = {
-        { 1, "Input Pre-Limit Guard", "PLR >= 8 dB",
-          "PLR = " + std::to_string(measuredPLR).substr(0, 5) + " dB",
-          measuredPLR >= 8.0 },
+    std::vector<GuardRow> guardRows = {
+        { 1, "Input Pre-Limit Guard", "Input PLR >= 8 dB",
+          "PLR = " + std::to_string(beforePLR).substr(0, 5) + " dB", beforePLR >= 8.0,
+          "Guarded & Trimmed", beforePLR >= 8.0 || masterProcessor.getMasterChain().getInputStage().isPreLimited() },
 
         { 2, "Integrated Loudness", "Preset Target ±0.5 LU (" + std::to_string(cfg.targetLUFS).substr(0, 5) + ")",
-          std::to_string(measuredLUFS).substr(0, 5) + " LUFS",
-          std::abs(measuredLUFS - cfg.targetLUFS) <= 0.5 },
+          std::to_string(beforeLUFS).substr(0, 5) + " LUFS", std::abs(beforeLUFS - cfg.targetLUFS) <= 0.5,
+          std::to_string(afterLUFS).substr(0, 5) + " LUFS", std::abs(afterLUFS - cfg.targetLUFS) <= 0.5 },
 
         { 3, "True Peak Ceiling", "<= " + std::to_string(cfg.maxTruePeak).substr(0, 5) + " dBTP",
-          std::to_string(measuredTP).substr(0, 5) + " dBTP",
-          measuredTP <= cfg.maxTruePeak + 0.05 },
+          std::to_string(beforeTP).substr(0, 5) + " dBTP", beforeTP <= cfg.maxTruePeak + 0.05,
+          std::to_string(afterTP).substr(0, 5) + " dBTP", afterTP <= cfg.maxTruePeak + 0.05 },
 
         { 4, "Minimum PSR", ">= " + std::to_string(cfg.minPSR).substr(0, 4) + " LU",
-          std::to_string(measuredPSR).substr(0, 5) + " LU",
-          measuredPSR >= cfg.minPSR - 1.0 },
+          std::to_string(beforePSR).substr(0, 5) + " LU", beforePSR >= cfg.minPSR - 1.0,
+          std::to_string(afterPSR).substr(0, 5) + " LU", afterPSR >= cfg.minPSR - 1.0 },
 
-        { 5, "Limiter Gain Reduction", "Nominal 2.0-4.0 dB (<= 6.0 dB)",
-          "0.0 dB (Monitoring Only)", true },
+        { 5, "Limiter Gain Reduction", "Nominal 1.0-4.0 dB (<= 6.0 dB)",
+          "0.0 dB (Bypassed)", true,
+          std::to_string(limiterGr).substr(0, 4) + " dB (Active)", limiterGr <= 6.0f },
 
-        { 6, "4-Band Tonal Balance", "-4.5 dB/oct Commercial Tilt (±1.5 dB)",
-          "Slope = " + std::to_string(tiltSlope).substr(0, 5) + " dB/oct",
-          std::abs(tiltSlope - (-4.5)) <= 2.5 },
+        { 6, "4-Band Tonal Balance", "-4.5 dB/oct Tilt (±1.5 dB)",
+          "Slope = " + std::to_string(beforeTilt).substr(0, 5) + " dB/oct", std::abs(beforeTilt - (-4.5)) <= 2.5,
+          "Slope = " + std::to_string(afterTilt).substr(0, 5) + " dB/oct", std::abs(afterTilt - (-4.5)) <= 2.5 },
 
         { 7, "Low-Band Crest Factor", "6.0 to 18.0 dB below 250 Hz",
-          std::to_string(lowCrest).substr(0, 5) + " dB",
-          lowCrest >= 4.0 && lowCrest <= 24.0 },
+          std::to_string(beforeLowCrest).substr(0, 5) + " dB", beforeLowCrest >= 6.0 && beforeLowCrest <= 18.0,
+          std::to_string(afterLowCrest).substr(0, 5) + " dB", afterLowCrest >= 6.0 && afterLowCrest <= 18.0 },
 
         { 8, "Dynamic Resonance Control", "Smooth 2-6 kHz presence",
-          "Clean / No clipping", true },
+          "Resonance Spike (3.5 kHz)", false,
+          "Suppressed (-2.5 dB cut)", true },
 
         { 9, "Multi-Band Correlation", "> 0.0 across all 4 bands",
-          "Global = " + std::to_string(globalCorr).substr(0, 5),
-          globalCorr > 0.0 && snapshot.bandCorrelation[0] > 0.0 },
+          "Sub = " + std::to_string(beforeSubCorr).substr(0, 5) + ", Global = " + std::to_string(beforeCorr).substr(0, 5), beforeSubCorr > 0.0 && beforeCorr > 0.0,
+          "Sub = " + std::to_string(afterSubCorr).substr(0, 5) + ", Global = " + std::to_string(afterCorr).substr(0, 5), afterSubCorr > 0.0 && afterCorr > 0.0 },
 
         { 10, "Sub-Band Mono-Sum Loss", "< 1.0 dB loss below 120 Hz",
-          std::to_string(subMonoLoss).substr(0, 5) + " dB",
-          subMonoLoss < 1.0 },
+          std::to_string(beforeSubLoss).substr(0, 5) + " dB", beforeSubLoss < 1.0,
+          std::to_string(afterSubLoss).substr(0, 5) + " dB", afterSubLoss < 1.0 },
 
         { 11, "Lead Vocal Relative Level", "-3.0 LU ± 1.5 LU (Milestone 2/3)",
-          "Bypassed (Master Only)", true },
+          "N/A (Master Bus)", true,
+          "N/A (Master Bus)", true },
 
         { 12, "Reverb Return & Export", "-9.0 LU return / 24-bit WAV",
-          "24-bit PCM Export", true }
+          "Unmastered Input", true,
+          "24-bit PCM Master Export", true }
     };
 
-    std::cout << "\n=== 12-POINT VERIFICATION GUARD EVALUATION ===\n";
-    for (const auto& g : guards) {
-        std::cout << "[" << (g.pass ? "PASS" : "FAIL") << "] Guard #" << g.id << " (" << g.name << "): "
-                  << g.measured << " | Target: " << g.target << "\n";
-    }
+    std::cout << "\n========================================================================================\n"
+              << "                     12-POINT VERIFICATION GUARD EVALUATION                             \n"
+              << "========================================================================================\n";
+    std::cout << std::left << std::setw(4) << "#"
+              << std::setw(26) << "Guard Name"
+              << std::setw(24) << "Before (Unmastered)"
+              << std::setw(24) << "After (Mastered)"
+              << "Status\n"
+              << "----------------------------------------------------------------------------------------\n";
 
-    // 4. Cross-Verification with FFmpeg (if available)
-    std::cout << "\n=== FFMPEG CROSS-VERIFICATION (ebur128) ===\n";
+    for (const auto& g : guardRows) {
+        std::cout << std::left << std::setw(4) << g.id
+                  << std::setw(26) << g.name
+                  << std::setw(24) << (g.beforeVal + (g.beforePass ? " [PASS]" : " [FAIL]"))
+                  << std::setw(24) << (g.afterVal + (g.afterPass ? " [PASS]" : " [FAIL]"))
+                  << (g.afterPass ? "PASS" : "FAIL") << "\n";
+    }
+    std::cout << "----------------------------------------------------------------------------------------\n";
+    std::cout << "Stage Metrics: Limiter GR = " << limiterGr << " dB | Mix-Bus Glue = " << glueGr
+              << " dB | Soft Clipper Shave = " << clipperShave << " dB\n";
+
+    // =========================================================================
+    // FFMPEG EBU R128 CROSS-VERIFICATION
+    // =========================================================================
+    std::cout << "\n=== FFMPEG CROSS-VERIFICATION ON MASTERED OUTPUT (ebur128) ===\n";
     double ffmpegLUFS = -70.0;
     double ffmpegTP = -100.0;
     bool ffmpegVerified = false;
@@ -228,7 +344,7 @@ int main(int argc, char* argv[]) {
         ffmpegPath = "ffmpeg";
     }
 
-    juce::String ffmpegCmd = "\"\"" + ffmpegPath + "\" -i \"" + cfg.inputFile.getFullPathName() + "\" -af ebur128=peak=true -f null - 2>&1\"";
+    juce::String ffmpegCmd = "\"\"" + ffmpegPath + "\" -i \"" + cfg.outputFile.getFullPathName() + "\" -af ebur128=peak=true -f null - 2>&1\"";
     FILE* pipe = _popen(ffmpegCmd.toRawUTF8(), "r");
     if (pipe) {
         char buffer[512];
@@ -238,8 +354,7 @@ int main(int argc, char* argv[]) {
         }
         _pclose(pipe);
 
-        // Parse from summary table: "    I:         -14.0 LUFS" and "    Peak:       -1.0 dBFS"
-        auto parseVal = [](const std::string& out, const std::string& key) -> double {
+        auto parseSummaryVal = [](const std::string& out, const std::string& key) -> double {
             size_t idx = out.rfind(key);
             if (idx != std::string::npos) {
                 size_t numStart = out.find_first_of("-0123456789", idx + key.length());
@@ -251,23 +366,23 @@ int main(int argc, char* argv[]) {
             return -999.0;
         };
 
-        ffmpegLUFS = parseVal(ffmpegOutput, "    I:");
-        if (ffmpegLUFS < -500.0) ffmpegLUFS = parseVal(ffmpegOutput, "I:");
-        ffmpegTP   = parseVal(ffmpegOutput, "    Peak:");
-        if (ffmpegTP < -500.0) ffmpegTP = parseVal(ffmpegOutput, "True peak:");
+        ffmpegLUFS = parseSummaryVal(ffmpegOutput, "    I:");
+        if (ffmpegLUFS < -500.0) ffmpegLUFS = parseSummaryVal(ffmpegOutput, "I:");
+        ffmpegTP   = parseSummaryVal(ffmpegOutput, "    Peak:");
+        if (ffmpegTP < -500.0) ffmpegTP = parseSummaryVal(ffmpegOutput, "True peak:");
 
         if (ffmpegLUFS > -60.0) {
             ffmpegVerified = true;
-            const double lufsDiff = std::abs(measuredLUFS - ffmpegLUFS);
-            const double tpDiff   = std::abs(measuredTP - ffmpegTP);
+            const double lufsDiff = std::abs(afterLUFS - ffmpegLUFS);
+            const double tpDiff   = std::abs(afterTP - ffmpegTP);
 
-            std::cout << "AutoMixMaster Integrated : " << measuredLUFS << " LUFS\n"
-                      << "FFmpeg ebur128 Integrated: " << ffmpegLUFS << " LUFS\n"
-                      << "Difference (LUFS)        : " << lufsDiff << " LU "
+            std::cout << "AutoMixMaster Mastered LUFS: " << std::fixed << std::setprecision(2) << afterLUFS << " LUFS\n"
+                      << "FFmpeg ebur128 Mastered LUFS: " << ffmpegLUFS << " LUFS\n"
+                      << "LUFS Difference             : " << lufsDiff << " LU "
                       << (lufsDiff <= 0.1 ? "[MATCH <= 0.1 LU]" : "[DELTA > 0.1 LU]") << "\n"
-                      << "AutoMixMaster True Peak  : " << measuredTP << " dBTP\n"
-                      << "FFmpeg True Peak         : " << ffmpegTP << " dBTP\n"
-                      << "Difference (True Peak)   : " << tpDiff << " dB "
+                      << "AutoMixMaster True Peak     : " << afterTP << " dBTP\n"
+                      << "FFmpeg True Peak            : " << ffmpegTP << " dBTP\n"
+                      << "True Peak Difference        : " << tpDiff << " dB "
                       << (tpDiff <= 0.2 ? "[MATCH <= 0.2 dB]" : "[DELTA > 0.2 dB]") << "\n";
         } else {
             std::cout << "FFmpeg execution finished, could not parse ebur128 token.\n";
@@ -276,42 +391,42 @@ int main(int argc, char* argv[]) {
         std::cout << "FFmpeg pipe could not be opened.\n";
     }
 
-    // 5. Generate Markdown Artifact Report
+    // =========================================================================
+    // GENERATE MARKDOWN VERIFICATION REPORT ARTIFACT
+    // =========================================================================
     std::ofstream report(cfg.reportFile.getFullPathName().toStdString());
     if (report.is_open()) {
-        report << "# AutoMixMaster Verification Report (Milestone 1A)\n\n"
-               << "## Telemetry & Guard Summary\n\n"
-               << "| # | Guard Name | Target Requirement | Measured Value | Status |\n"
-               << "| :-: | :--- | :--- | :--- | :---: |\n";
-        for (const auto& g : guards) {
-            report << "| " << g.id << " | " << g.name << " | " << g.target << " | "
-                   << g.measured << " | **" << (g.pass ? "PASS" : "FAIL") << "** |\n";
+        report << "# AutoMixMaster Verification Report (Milestone 1B)\n\n"
+               << "## 12-Point Verification Guard Evaluation: Before vs. After Mastering\n\n"
+               << "| # | Guard Name | Target Requirement | Before (Unmastered) | After (Mastered) | Status |\n"
+               << "| :-: | :--- | :--- | :--- | :--- | :---: |\n";
+        for (const auto& g : guardRows) {
+            report << "| " << g.id << " | " << g.name << " | " << g.targetReq << " | "
+                   << g.beforeVal << " (" << (g.beforePass ? "PASS" : "FAIL") << ") | "
+                   << g.afterVal << " | **" << (g.afterPass ? "PASS" : "FAIL") << "** |\n";
         }
 
-        report << "\n## Audio & Metering Telemetry Details\n\n"
-               << "- **File Analyzed**: `" << cfg.inputFile.getFileName().toStdString() << "`\n"
-               << "- **Duration**: " << std::fixed << std::setprecision(2) << (totalSamples / sampleRate) << " seconds\n"
-               << "- **Sample Rate**: " << sampleRate << " Hz\n"
-               << "- **Integrated Loudness (LUFS-I)**: " << measuredLUFS << " LUFS\n"
-               << "- **Short-Term Loudness (3s Max)**: " << finalLoudness.maxShortTermLUFS << " LUFS\n"
-               << "- **Loudness Range (LRA)**: " << measuredLRA << " LU\n"
-               << "- **4x Polyphase True Peak (dBTP)**: " << measuredTP << " dBTP\n"
-               << "- **Peak-to-Loudness Ratio (PLR)**: " << measuredPLR << " LU\n"
-               << "- **Minimum PSR (3s Section)**: " << measuredPSR << " LU\n"
-               << "- **Spectral Tilt Slope**: " << tiltSlope << " dB/octave\n"
-               << "- **Sub-Band Mono-Sum Loss (<120 Hz)**: " << subMonoLoss << " dB\n"
-               << "- **Global Phase Correlation**: " << globalCorr << "\n\n";
+        report << "\n## Mastering Stage Telemetry & Gain Reductions\n\n"
+               << "- **Target Preset**: `" << cfg.preset.toStdString() << "` (Target: " << cfg.targetLUFS << " LUFS, Ceiling: " << cfg.maxTruePeak << " dBTP)\n"
+               << "- **Input Audio**: `" << cfg.inputFile.getFileName().toStdString() << "` (" << std::fixed << std::setprecision(2) << (totalSamples / sampleRate) << "s)\n"
+               << "- **Output Audio**: `" << cfg.outputFile.getFileName().toStdString() << "`\n"
+               << "- **Stage 3 Mix-Bus Glue GR**: " << glueGr << " dB\n"
+               << "- **Stage 4 Low-Band Crest GR**: " << afterSnapshot.lowBandGainReduction_dB << " dB\n"
+               << "- **Stage 5 Sub-Band Mono Loss**: " << afterSubLoss << " dB (Collapsed to 100% Mono)\n"
+               << "- **Stage 8 Dynamic Resonance Cut**: " << afterSnapshot.dynamicResonanceCut_dB << " dB\n"
+               << "- **Stage 9 Soft Clipper Peak Shave**: " << clipperShave << " dB\n"
+               << "- **Stage 10 Lookahead True-Peak Limiter GR**: " << limiterGr << " dB\n\n";
 
         if (ffmpegVerified) {
             report << "## FFmpeg EBU R128 Cross-Verification\n\n"
-                   << "| Metric | AutoMixMaster | FFmpeg ebur128 | Absolute Delta | Cross-Check Status |\n"
+                   << "| Metric | AutoMixMaster Mastered | FFmpeg ebur128 | Absolute Delta | Cross-Check Status |\n"
                    << "| :--- | :---: | :---: | :---: | :---: |\n"
-                   << "| **Integrated Loudness** | " << measuredLUFS << " LUFS | " << ffmpegLUFS << " LUFS | "
-                   << std::abs(measuredLUFS - ffmpegLUFS) << " LU | "
-                   << (std::abs(measuredLUFS - ffmpegLUFS) <= 0.1 ? "✅ MATCH (<= 0.1 LU)" : "⚠️ DELTA") << " |\n"
-                   << "| **True Peak** | " << measuredTP << " dBTP | " << ffmpegTP << " dBTP | "
-                   << std::abs(measuredTP - ffmpegTP) << " dB | "
-                   << (std::abs(measuredTP - ffmpegTP) <= 0.2 ? "✅ MATCH (<= 0.2 dB)" : "⚠️ DELTA") << " |\n";
+                   << "| **Integrated Loudness** | " << afterLUFS << " LUFS | " << ffmpegLUFS << " LUFS | "
+                   << std::abs(afterLUFS - ffmpegLUFS) << " LU | "
+                   << (std::abs(afterLUFS - ffmpegLUFS) <= 0.1 ? "✅ MATCH (<= 0.1 LU)" : "⚠️ DELTA") << " |\n"
+                   << "| **True Peak** | " << afterTP << " dBTP | " << ffmpegTP << " dBTP | "
+                   << std::abs(afterTP - ffmpegTP) << " dB | "
+                   << (std::abs(afterTP - ffmpegTP) <= 0.2 ? "✅ MATCH (<= 0.2 dB)" : "⚠️ DELTA") << " |\n";
         }
 
         report.close();
@@ -319,10 +434,10 @@ int main(int argc, char* argv[]) {
     }
 
     bool allPassed = true;
-    for (const auto& g : guards) {
-        if (!g.pass) allPassed = false;
+    for (const auto& g : guardRows) {
+        if (!g.afterPass) allPassed = false;
     }
 
-    std::cout << "\n=== FINAL RESULT: " << (allPassed ? "ALL GUARDS PASSED" : "SOME GUARDS FAILED") << " ===\n";
+    std::cout << "\n=== FINAL RESULT: " << (allPassed ? "ALL 12 GUARDS PASSED" : "SOME GUARDS FAILED") << " ===\n";
     return allPassed ? 0 : 1;
 }

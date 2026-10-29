@@ -27,6 +27,13 @@ struct TelemetrySnapshot {
 
     // FL Studio Wrapper Diagnostics
     bool  sidechainActive     = false;
+
+    // Milestone 1B Mastering Stage Metrics
+    float limiterGainReduction_dB = 0.0f;
+    float glueGainReduction_dB    = 0.0f;
+    float softClipperShave_dB     = 0.0f;
+    float lowBandGainReduction_dB = 0.0f;
+    float dynamicResonanceCut_dB  = 0.0f;
 };
 
 } // namespace dsp

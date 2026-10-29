@@ -7,6 +7,7 @@
 #include "dsp/TruePeakMeter.h"
 #include "dsp/SpectralAnalyzer.h"
 #include "dsp/SpatialAnalyzer.h"
+#include "dsp/MasterChain.h"
 
 class AutoMixMasterProcessor : public juce::AudioProcessor {
 public:
@@ -39,17 +40,37 @@ public:
     // Lock-free telemetry snapshot query for GUI and Headless Verifier
     dsp::TelemetrySnapshot getTelemetrySnapshot() const noexcept;
 
-    // Direct access to analyzers for comprehensive offline evaluation
+    // Direct access to master chain and analyzers
+    dsp::MasterChain& getMasterChain() noexcept { return masterChain; }
+    const dsp::MasterChain& getMasterChain() const noexcept { return masterChain; }
+
     const dsp::LoudnessMeter& getLoudnessMeter() const noexcept { return loudnessMeter; }
     const dsp::TruePeakMeter& getTruePeakMeter() const noexcept { return truePeakMeter; }
     const dsp::SpectralAnalyzer& getSpectralAnalyzer() const noexcept { return spectralAnalyzer; }
     const dsp::SpatialAnalyzer& getSpatialAnalyzer() const noexcept { return spatialAnalyzer; }
+
+    void setProcessingEnabled(bool enabled) noexcept { processingEnabled = enabled; }
+    [[nodiscard]] bool isProcessingEnabled() const noexcept { return processingEnabled; }
+
+    void resetAnalyzers() noexcept {
+        loudnessMeter.reset();
+        truePeakMeter.reset();
+        spectralAnalyzer.reset();
+        spatialAnalyzer.reset();
+        masterChain.reset();
+        fifoBuffer.clear();
+        fifoWritePos = 0;
+    }
 
 private:
     static constexpr int kInternalFifoCapacity = 16384;
 
     double currentSampleRate = 48000.0;
     std::atomic<bool> sidechainActive { false };
+    bool processingEnabled = true;
+
+    // 10-Stage Mastering Chain
+    dsp::MasterChain     masterChain;
 
     // DSP Analyzers & Metering Engines
     dsp::LoudnessMeter   loudnessMeter;

@@ -15,10 +15,11 @@ out/
 *.exe
 *.vst3
 
-# Generated Audio Test Files
+# Generated Audio & Verification Test Files
 *.wav
 *.mp3
 *.flac
+verification_report.md
 
 # IDE & OS temporary files
 .vscode/
