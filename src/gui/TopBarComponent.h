@@ -86,7 +86,7 @@ public:
         };
         addAndMakeVisible(presetDynamicBtn);
 
-        loadRefBtn.setButtonText("LOAD REF...");
+        loadRefBtn.setButtonText("LOAD REFERENCE");
         loadRefBtn.onClick = [this]() {
             loadReferenceFile();
         };
@@ -204,8 +204,8 @@ public:
         x += 124;
         presetDynamicBtn.setBounds(x, y, 102, 28);
         x += 104;
-        loadRefBtn.setBounds(x, y, 90, 28);
-        x += 98;
+        loadRefBtn.setBounds(x, y, 106, 28);
+        x += 110;
 
         // Monitoring
         levelMatchBtn.setBounds(x, y, 130, 28);

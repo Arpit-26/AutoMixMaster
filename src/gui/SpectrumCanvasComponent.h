@@ -147,12 +147,14 @@ public:
         g.strokePath(corridorPath, juce::PathStrokeType(1.0f, juce::PathStrokeType::curved));
 
         // 5. Pre-Processing Subtle Spectrum Curve
+        constexpr float kVisualDisplayOffsetDb = -18.0f;
+
         juce::Path prePath;
         bool preStarted = false;
         for (int i = 0; i < dsp::SpectralAnalyzer::kNumSpectrumBins; ++i) {
             const float f = 20.0f * std::pow(1000.0f, static_cast<float>(i) / (dsp::SpectralAnalyzer::kNumSpectrumBins - 1));
             const float x = freqToX(f);
-            const float y = dbToY(preBins[static_cast<size_t>(i)]);
+            const float y = dbToY(preBins[static_cast<size_t>(i)] + kVisualDisplayOffsetDb);
             if (!preStarted) {
                 prePath.startNewSubPath(x, y);
                 preStarted = true;
@@ -171,7 +173,7 @@ public:
         for (int i = 0; i < dsp::SpectralAnalyzer::kNumSpectrumBins; ++i) {
             const float f = 20.0f * std::pow(1000.0f, static_cast<float>(i) / (dsp::SpectralAnalyzer::kNumSpectrumBins - 1));
             const float x = freqToX(f);
-            const float y = dbToY(currentBins[static_cast<size_t>(i)]);
+            const float y = dbToY(currentBins[static_cast<size_t>(i)] + kVisualDisplayOffsetDb);
 
             if (!postStarted) {
                 postPath.startNewSubPath(x, y);
@@ -202,7 +204,7 @@ public:
         drawDynamicUnmaskingOverlay(g, freqToX, dbToY);
 
         // 8. Top 4-Band Compliance Status Badges
-        drawBandBadges(g, plotX, plotY);
+        drawBandBadges(g, plotX, plotY, plotW);
     }
 
 private:
@@ -262,7 +264,7 @@ private:
         g.drawText("VOCAL DUCK -" + juce::String(vocalDucking, 1) + "dB", vx - 46.0f, vyDip - 22.0f, 92.0f, 16.0f, juce::Justification::centred);
     }
 
-    void drawBandBadges(juce::Graphics& g, float plotX, float plotY) {
+    void drawBandBadges(juce::Graphics& g, float plotX, float plotY, float plotW) {
         // 4 Tonal balance corridor compliance badges
         const struct Badge {
             const char* name;
@@ -297,8 +299,9 @@ private:
                        badgeRect.getRight() - 34.0f, badgeRect.getY(), 30.0f, badgeRect.getHeight(), juce::Justification::centredRight);
         }
 
-        // Tilt readout badge on top right
-        const auto tiltRect = juce::Rectangle<float>(plotX + 710.0f, plotY - 24.0f, 96.0f, 18.0f);
+        // Tilt readout badge on top right (widened to accommodate "dB/oct")
+        const float tiltW = 114.0f;
+        const auto tiltRect = juce::Rectangle<float>(plotX + plotW - tiltW, plotY - 24.0f, tiltW, 18.0f);
         g.setColour(Palette::cardElevated());
         g.fillRoundedRectangle(tiltRect, 4.0f);
         g.setColour(Palette::cyan().withAlpha(0.5f));
@@ -306,7 +309,7 @@ private:
         g.setFont(Typography::code(9.0f));
         g.setColour(Palette::cyan());
         const float measuredTilt = latestSnap.spectralTiltSlope != 0.0f ? latestSnap.spectralTiltSlope : -4.58f;
-        g.drawText("TILT: " + juce::String(measuredTilt, 2) + "dB/o", tiltRect, juce::Justification::centred);
+        g.drawText("TILT: " + juce::String(measuredTilt, 2) + " dB/oct", tiltRect, juce::Justification::centred);
     }
 
     AutoMixMasterProcessor& processor;
