@@ -120,6 +120,8 @@ target_link_libraries(AutoMixMaster_DSP PUBLIC
     sapi
 )
 
+target_link_options(AutoMixMaster_DSP INTERFACE -static)
+
 # 4. Optional VST3 Plugin Target (Enabled when building VST3 with juceaide support)
 option(BUILD_VST3_PLUGIN "Build VST3 Plugin Target" ON)
 if (BUILD_VST3_PLUGIN)
@@ -135,10 +137,26 @@ if (BUILD_VST3_PLUGIN)
         PLUGIN_CODE Amm1
         FORMATS VST3 Standalone
         PRODUCT_NAME "AutoMixMaster"
+        VST3_AUTO_MANIFEST FALSE
     )
 
     target_link_libraries(AutoMixMaster_VST3 PRIVATE
         AutoMixMaster_DSP
+    )
+
+    target_link_options(AutoMixMaster_VST3 INTERFACE -static)
+    if (TARGET AutoMixMaster_VST3_VST3)
+        target_link_options(AutoMixMaster_VST3_VST3 PRIVATE -static)
+    endif()
+    if (TARGET AutoMixMaster_VST3_Standalone)
+        target_link_options(AutoMixMaster_VST3_Standalone PRIVATE -static)
+    endif()
+
+    add_custom_command(TARGET AutoMixMaster_VST3_VST3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E remove -f
+            "${CMAKE_BINARY_DIR}/AutoMixMaster_VST3_artefacts/Release/VST3/AutoMixMaster.vst3/Contents/Resources/moduleinfo.json"
+            "${CMAKE_BINARY_DIR}/AutoMixMaster_VST3_artefacts/Release/VST3/AutoMixMaster.vst3/Contents/moduleinfo.json"
+        COMMENT "Ensuring moduleinfo.json is removed for clean FL Studio VST3 factory scan"
     )
 endif()
 
