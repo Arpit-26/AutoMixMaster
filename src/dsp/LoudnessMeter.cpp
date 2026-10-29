@@ -91,10 +91,12 @@ void LoudnessMeter::processHop(double energyL, double energyR) noexcept {
     const double stLufs = (stMean > 1.0e-12) ? (-0.691 + 10.0 * std::log10(stMean)) : -70.0;
     atomicShortTerm.store(static_cast<float>(stLufs), std::memory_order_relaxed);
 
-    // Track max short-term
-    float currentMax = atomicMaxShortTerm.load(std::memory_order_relaxed);
-    if (static_cast<float>(stLufs) > currentMax) {
-        atomicMaxShortTerm.store(static_cast<float>(stLufs), std::memory_order_relaxed);
+    // Track max short-term only once a full 3.0-second window (30 hops) has accumulated
+    if (shortTermHopCount >= 30) {
+        float currentMax = atomicMaxShortTerm.load(std::memory_order_relaxed);
+        if (static_cast<float>(stLufs) > currentMax) {
+            atomicMaxShortTerm.store(static_cast<float>(stLufs), std::memory_order_relaxed);
+        }
     }
 
     // Record short-term history for LRA

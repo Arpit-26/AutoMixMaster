@@ -39,6 +39,9 @@ public:
 
     MacroBandScoring getScoring() const noexcept;
 
+    static constexpr int kNumSpectrumBins = 64;
+    void copySpectrumBins(std::array<float, kNumSpectrumBins>& dest) const noexcept;
+
 private:
     void processFFTFrame() noexcept;
 
@@ -75,6 +78,9 @@ private:
     std::atomic<float> atomicTreble_dB        { 0.0f };
     std::atomic<float> atomicSpectralTilt     { -4.5f };
     std::atomic<float> atomicLowBandCrest_dB  { 0.0f };
+
+    // 64 log-spaced spectrum curve bins for 60 FPS GUI rendering (-80 dB to +12 dB)
+    std::array<std::atomic<float>, kNumSpectrumBins> spectrumBinsDb;
 };
 
 } // namespace dsp

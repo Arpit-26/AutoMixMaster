@@ -62,6 +62,13 @@ add_library(AutoMixMaster_DSP STATIC
     src/dsp/mix/StemClassifier.cpp
     src/dsp/mix/SourceChainProcessor.h
     src/dsp/mix/SourceChainProcessor.cpp
+    src/gui/GuiColours.h
+    src/gui/TopBarComponent.h
+    src/gui/SpectrumCanvasComponent.h
+    src/gui/MacroBarComponent.h
+    src/gui/TelemetryDockComponent.h
+    src/gui/PluginEditor.h
+    src/gui/PluginEditor.cpp
     src/PluginProcessor.h
     src/PluginProcessor.cpp
 )
@@ -78,16 +85,43 @@ target_compile_definitions(AutoMixMaster_DSP PUBLIC
 target_link_libraries(AutoMixMaster_DSP PUBLIC
     RTNeural
     juce::juce_audio_basics
+    juce::juce_audio_devices
     juce::juce_audio_formats
     juce::juce_audio_processors
+    juce::juce_audio_utils
     juce::juce_dsp
+    juce::juce_graphics
+    juce::juce_gui_basics
+    juce::juce_gui_extra
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
+    ws2_32
+    wininet
+    version
+    shlwapi
+    ole32
+    uuid
+    winmm
+    dbghelp
+    imm32
+    comctl32
+    dcomp
+    d2d1
+    dwrite
+    dxgi
+    dxguid
+    ksguid
+    ksuser
+    oleaut32
+    comdlg32
+    dwmapi
+    d3d11
+    sapi
 )
 
 # 4. Optional VST3 Plugin Target (Enabled when building VST3 with juceaide support)
-option(BUILD_VST3_PLUGIN "Build VST3 Plugin Target" OFF)
+option(BUILD_VST3_PLUGIN "Build VST3 Plugin Target" ON)
 if (BUILD_VST3_PLUGIN)
     juce_add_plugin(AutoMixMaster_VST3
         COMPANY_NAME "AutoMixMasterLab"
@@ -101,10 +135,6 @@ if (BUILD_VST3_PLUGIN)
         PLUGIN_CODE Amm1
         FORMATS VST3 Standalone
         PRODUCT_NAME "AutoMixMaster"
-    )
-
-    target_sources(AutoMixMaster_VST3 PRIVATE
-        src/PluginProcessor.cpp
     )
 
     target_link_libraries(AutoMixMaster_VST3 PRIVATE

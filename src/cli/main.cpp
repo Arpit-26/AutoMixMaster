@@ -1,6 +1,8 @@
 #include <juce_core/juce_core.h>
+#include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "../PluginProcessor.h"
+#include "../gui/PluginEditor.h"
 #include "TestSignalGenerator.h"
 #include <iostream>
 #include <fstream>
@@ -430,6 +432,21 @@ static int runMultitrackTest(const CliConfig& cfg) {
     (void)glueGr;
     (void)clipperShave;
 
+    // Render High-Resolution Live Plugin GUI Snapshot (60 FPS Engine)
+    std::cout << "\n>>> STEP 7: Rendering High-Resolution Live Plugin GUI Snapshot (60 FPS Engine)...\n";
+    auto* editor = dynamic_cast<gui::AutoMixMasterEditor*>(masterProc.createEditor());
+    if (editor != nullptr) {
+        juce::File previewFile = juce::File::getCurrentWorkingDirectory().getChildFile("gui_preview.png");
+        bool ok = editor->saveSnapshotToPng(previewFile, 1.0f);
+        if (ok && previewFile.existsAsFile()) {
+            std::cout << "Successfully exported GUI snapshot to: " << previewFile.getFullPathName().toStdString() << " ("
+                      << (previewFile.getSize() / 1024) << " KB)\n";
+        } else {
+            std::cout << "Warning: Failed to save GUI snapshot.\n";
+        }
+        delete editor;
+    }
+
     // FFmpeg ebur128 cross-verification
     double ffmpegLUFS = -70.0;
     double ffmpegTP = -100.0;
@@ -604,6 +621,7 @@ static int runMultitrackTest(const CliConfig& cfg) {
 }
 
 int main(int argc, char* argv[]) {
+    juce::ScopedJuceInitialiser_GUI guiInit;
     juce::AudioFormatManager formatManager;
     formatManager.registerBasicFormats();
 

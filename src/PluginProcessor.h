@@ -23,8 +23,8 @@ public:
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
-    juce::AudioProcessorEditor* createEditor() override { return nullptr; }
-    bool hasEditor() const override { return false; }
+    juce::AudioProcessorEditor* createEditor() override;
+    bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return "AutoMixMaster"; }
     bool acceptsMidi() const override { return false; }
@@ -86,6 +86,29 @@ public:
 
     [[nodiscard]] int getInterPluginSlot() const noexcept { return interPluginSlot; }
 
+    // Milestone 3A: Level-Matched A/B and Delta Monitoring Controls
+    void setLevelMatchedAB(bool enabled) noexcept { levelMatchedAB.store(enabled, std::memory_order_relaxed); }
+    [[nodiscard]] bool isLevelMatchedAB() const noexcept { return levelMatchedAB.load(std::memory_order_relaxed); }
+
+    void setListenBypassA(bool listenA) noexcept { listenBypassA.store(listenA, std::memory_order_relaxed); }
+    [[nodiscard]] bool isListeningToDryA() const noexcept { return listenBypassA.load(std::memory_order_relaxed); }
+
+    void setDeltaListening(bool delta) noexcept { deltaListening.store(delta, std::memory_order_relaxed); }
+    [[nodiscard]] bool isDeltaListening() const noexcept { return deltaListening.load(std::memory_order_relaxed); }
+
+    // Milestone 3A: 4 Flagship Macro Controls
+    void setMacroStyle(float val) noexcept { macroStyle.store(std::clamp(val, 0.0f, 1.0f), std::memory_order_relaxed); }
+    [[nodiscard]] float getMacroStyle() const noexcept { return macroStyle.load(std::memory_order_relaxed); }
+
+    void setMacroIntensity(float val) noexcept { macroIntensity.store(std::clamp(val, 0.0f, 1.0f), std::memory_order_relaxed); }
+    [[nodiscard]] float getMacroIntensity() const noexcept { return macroIntensity.load(std::memory_order_relaxed); }
+
+    void setMacroPunchGlue(float val) noexcept { macroPunchGlue.store(std::clamp(val, 0.0f, 1.0f), std::memory_order_relaxed); }
+    [[nodiscard]] float getMacroPunchGlue() const noexcept { return macroPunchGlue.load(std::memory_order_relaxed); }
+
+    void setMacroClarity(float val) noexcept { macroClarity.store(std::clamp(val, 0.0f, 1.0f), std::memory_order_relaxed); }
+    [[nodiscard]] float getMacroClarity() const noexcept { return macroClarity.load(std::memory_order_relaxed); }
+
     void resetAnalyzers() noexcept {
         loudnessMeter.reset();
         truePeakMeter.reset();
@@ -103,6 +126,19 @@ private:
     double currentSampleRate = 48000.0;
     std::atomic<bool> sidechainActive { false };
     bool processingEnabled = true;
+
+    // Milestone 3A Monitoring & Macros
+    std::atomic<bool>  levelMatchedAB { false };
+    std::atomic<bool>  listenBypassA  { false };
+    std::atomic<bool>  deltaListening { false };
+
+    std::atomic<float> macroStyle     { 0.5f }; // 0 = Warm, 0.5 = Balanced, 1 = Open
+    std::atomic<float> macroIntensity { 1.0f }; // 0 to 1.0
+    std::atomic<float> macroPunchGlue { 0.5f }; // 0 to 1.0
+    std::atomic<float> macroClarity   { 0.5f }; // 0 to 1.0
+
+    // Pre-allocated dry buffer for zero-alloc level-matched A/B & delta listening
+    juce::AudioBuffer<float> dryBuffer;
 
     // Milestone 2 Mode & Stem Chain
     dsp::mix::PluginOperatingMode  operatingMode = dsp::mix::PluginOperatingMode::MasterBus;

@@ -36,6 +36,7 @@ public:
     void reset() noexcept;
 
     void setPreset(MasteringPreset preset) noexcept;
+    [[nodiscard]] MasteringPreset getCurrentPreset() const noexcept { return currentPreset; }
     void setTargetLUFS(double targetLUFS) noexcept;
     void setCeilingdBTP(double ceilingDbTP) noexcept;
 

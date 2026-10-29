@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "gui/PluginEditor.h"
 #include <cmath>
 
 AutoMixMasterProcessor::AutoMixMasterProcessor()
@@ -59,6 +60,9 @@ void AutoMixMasterProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
         // Report exact lookahead limiter delay to FL Studio PDC
         setLatencySamples(masterChain.getLatencySamples());
     }
+
+    dryBuffer.setSize(2, std::max(samplesPerBlock * 4, 8192), false, true, false);
+    dryBuffer.clear();
 }
 
 void AutoMixMasterProcessor::releaseResources() {
@@ -85,8 +89,17 @@ void AutoMixMasterProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     auto mainBus = getBusBuffer(buffer, true, 0);
     const int numSamples = mainBus.getNumSamples();
+    const int numChannels = mainBus.getNumChannels();
     if (numSamples == 0) {
         return;
+    }
+
+    // Save dry input for level-matched A/B comparison and delta listening
+    if (dryBuffer.getNumSamples() < numSamples) {
+        dryBuffer.setSize(numChannels, numSamples, false, false, true);
+    }
+    for (int ch = 0; ch < numChannels; ++ch) {
+        dryBuffer.copyFrom(ch, 0, mainBus, ch, 0, numSamples);
     }
 
     if (operatingMode == dsp::mix::PluginOperatingMode::TrackNode) {
@@ -181,6 +194,48 @@ void AutoMixMasterProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     // 2. Process audio through 10-Stage Master Chain if enabled
     if (processingEnabled) {
         masterChain.processBlock(mainBus.getArrayOfWritePointers(), mainBus.getNumChannels(), numSamples);
+
+        // Milestone 3A: Macro Intensity & Level-Matched Monitoring / Delta
+        const float intensity = macroIntensity.load(std::memory_order_relaxed);
+        if (intensity < 0.999f) {
+            for (int ch = 0; ch < numChannels; ++ch) {
+                float* mData = mainBus.getWritePointer(ch);
+                const float* dData = dryBuffer.getReadPointer(ch);
+                for (int i = 0; i < numSamples; ++i) {
+                    mData[i] = dData[i] * (1.0f - intensity) + mData[i] * intensity;
+                }
+            }
+        }
+
+        const bool isAB = levelMatchedAB.load(std::memory_order_relaxed);
+        const bool isListenA = listenBypassA.load(std::memory_order_relaxed);
+        const bool isDelta = deltaListening.load(std::memory_order_relaxed);
+
+        if (isAB || isDelta) {
+            const float postGain = masterChain.getPostGainMakeupLinear();
+            const float limiterGr = masterChain.getLimiterGainReduction_dB();
+            const float netGainFactor = postGain * static_cast<float>(std::pow(10.0, -limiterGr / 20.0));
+
+            if (isDelta) {
+                // Delta listening: Audition (Processed - GainMatchedDry)
+                for (int ch = 0; ch < numChannels; ++ch) {
+                    float* mData = mainBus.getWritePointer(ch);
+                    const float* dData = dryBuffer.getReadPointer(ch);
+                    for (int i = 0; i < numSamples; ++i) {
+                        mData[i] = mData[i] - (dData[i] * netGainFactor);
+                    }
+                }
+            } else if (isAB && isListenA) {
+                // Audition Level-Matched Dry (A)
+                for (int ch = 0; ch < numChannels; ++ch) {
+                    float* mData = mainBus.getWritePointer(ch);
+                    const float* dData = dryBuffer.getReadPointer(ch);
+                    for (int i = 0; i < numSamples; ++i) {
+                        mData[i] = dData[i] * netGainFactor;
+                    }
+                }
+            }
+        }
     }
 
     // 3. Push processed samples into pre-allocated circular ring buffer
@@ -254,6 +309,10 @@ dsp::TelemetrySnapshot AutoMixMasterProcessor::getTelemetrySnapshot() const noex
     snap.dynamicResonanceCut_dB  = masterChain.getResonanceMaxCut_dB();
 
     return snap;
+}
+
+juce::AudioProcessorEditor* AutoMixMasterProcessor::createEditor() {
+    return new gui::AutoMixMasterEditor(*this);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() {

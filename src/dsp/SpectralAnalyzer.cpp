@@ -45,6 +45,10 @@ void SpectralAnalyzer::reset() noexcept {
     atomicTreble_dB.store(0.0f, std::memory_order_relaxed);
     atomicSpectralTilt.store(-4.5f, std::memory_order_relaxed);
     atomicLowBandCrest_dB.store(0.0f, std::memory_order_relaxed);
+
+    for (int i = 0; i < kNumSpectrumBins; ++i) {
+        spectrumBinsDb[static_cast<size_t>(i)].store(-80.0f, std::memory_order_relaxed);
+    }
 }
 
 void SpectralAnalyzer::processFFTFrame() noexcept {
@@ -116,6 +120,50 @@ void SpectralAnalyzer::processFFTFrame() noexcept {
             const double slopeOctave = alpha * 0.3010299956639812; // log10(2)
             atomicSpectralTilt.store(static_cast<float>(slopeOctave), std::memory_order_relaxed);
         }
+    }
+
+    // 6. Map FFT magnitudes into 64 log-spaced spectrum curve bins for UI (20 Hz - 20 kHz)
+    constexpr double kMinFreq = 20.0;
+    constexpr double kMaxFreq = 20000.0;
+    const double logRatio = std::log(kMaxFreq / kMinFreq);
+
+    for (int binIdx = 0; binIdx < kNumSpectrumBins; ++binIdx) {
+        const double centerFreq = kMinFreq * std::exp((static_cast<double>(binIdx) / (kNumSpectrumBins - 1)) * logRatio);
+        // Estimate frequency window around center
+        const double fLow = centerFreq * 0.94;
+        const double fHigh = centerFreq * 1.06;
+
+        int kStart = std::max(1, static_cast<int>(std::floor(fLow / binHz)));
+        int kEnd = std::min(numBins - 1, static_cast<int>(std::ceil(fHigh / binHz)));
+        if (kEnd < kStart) kEnd = kStart;
+
+        double binEnergy = 0.0;
+        int count = 0;
+        for (int k = kStart; k <= kEnd; ++k) {
+            const double re = static_cast<double>(fftTimeData[static_cast<size_t>(2 * k)]);
+            const double im = static_cast<double>(fftTimeData[static_cast<size_t>(2 * k + 1)]);
+            binEnergy += (re * re + im * im);
+            ++count;
+        }
+
+        const double meanEnergy = (count > 0) ? (binEnergy / count) : 1.0e-12;
+        const float newDb = (meanEnergy > 1.0e-10) ? static_cast<float>(10.0 * std::log10(meanEnergy)) : -80.0f;
+
+        // Visual ballistics: fast attack (0.75), smooth release (0.25)
+        const float prevDb = spectrumBinsDb[static_cast<size_t>(binIdx)].load(std::memory_order_relaxed);
+        float smoothedDb = prevDb;
+        if (newDb > prevDb) {
+            smoothedDb = 0.70f * newDb + 0.30f * prevDb;
+        } else {
+            smoothedDb = 0.20f * newDb + 0.80f * prevDb;
+        }
+        spectrumBinsDb[static_cast<size_t>(binIdx)].store(std::clamp(smoothedDb, -80.0f, 15.0f), std::memory_order_relaxed);
+    }
+}
+
+void SpectralAnalyzer::copySpectrumBins(std::array<float, kNumSpectrumBins>& dest) const noexcept {
+    for (int i = 0; i < kNumSpectrumBins; ++i) {
+        dest[static_cast<size_t>(i)] = spectrumBinsDb[static_cast<size_t>(i)].load(std::memory_order_relaxed);
     }
 }
 
