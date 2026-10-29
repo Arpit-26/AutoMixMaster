@@ -1,0 +1,65 @@
+#pragma once
+#include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_dsp/juce_dsp.h>
+#include <atomic>
+#include "dsp/TelemetrySnapshot.h"
+#include "dsp/LoudnessMeter.h"
+#include "dsp/TruePeakMeter.h"
+#include "dsp/SpectralAnalyzer.h"
+#include "dsp/SpatialAnalyzer.h"
+
+class AutoMixMasterProcessor : public juce::AudioProcessor {
+public:
+    AutoMixMasterProcessor();
+    ~AutoMixMasterProcessor() override = default;
+
+    void prepareToPlay(double sampleRate, int samplesPerBlock) override;
+    void releaseResources() override;
+    bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
+    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+
+    juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+    bool hasEditor() const override { return false; }
+
+    const juce::String getName() const override { return "AutoMixMaster"; }
+    bool acceptsMidi() const override { return false; }
+    bool producesMidi() const override { return false; }
+    bool isMidiEffect() const override { return false; }
+    double getTailLengthSeconds() const override { return 0.0; }
+
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram(int) override {}
+    const juce::String getProgramName(int) override { return {}; }
+    void changeProgramName(int, const juce::String&) override {}
+
+    void getStateInformation(juce::MemoryBlock&) override {}
+    void setStateInformation(const void*, int) override {}
+
+    // Lock-free telemetry snapshot query for GUI and Headless Verifier
+    dsp::TelemetrySnapshot getTelemetrySnapshot() const noexcept;
+
+    // Direct access to analyzers for comprehensive offline evaluation
+    const dsp::LoudnessMeter& getLoudnessMeter() const noexcept { return loudnessMeter; }
+    const dsp::TruePeakMeter& getTruePeakMeter() const noexcept { return truePeakMeter; }
+    const dsp::SpectralAnalyzer& getSpectralAnalyzer() const noexcept { return spectralAnalyzer; }
+    const dsp::SpatialAnalyzer& getSpatialAnalyzer() const noexcept { return spatialAnalyzer; }
+
+private:
+    static constexpr int kInternalFifoCapacity = 16384;
+
+    double currentSampleRate = 48000.0;
+    std::atomic<bool> sidechainActive { false };
+
+    // DSP Analyzers & Metering Engines
+    dsp::LoudnessMeter   loudnessMeter;
+    dsp::TruePeakMeter   truePeakMeter;
+    dsp::SpectralAnalyzer spectralAnalyzer;
+    dsp::SpatialAnalyzer  spatialAnalyzer;
+
+    // Pre-allocated circular ring buffer for FL Studio variable buffer decoupling
+    juce::AudioBuffer<float> fifoBuffer;
+    int fifoWritePos = 0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AutoMixMasterProcessor)
+};

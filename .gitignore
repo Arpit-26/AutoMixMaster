@@ -1,0 +1,27 @@
+# CMake & Compiler Build Artifacts (Keep locally, never push to GitHub)
+build/
+cmake-build-*/
+out/
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+*.exe
+*.vst3
+
+# Generated Audio Test Files
+*.wav
+*.mp3
+*.flac
+
+# IDE & OS temporary files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
