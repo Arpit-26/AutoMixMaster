@@ -24,6 +24,7 @@ struct CliConfig {
 static CliConfig parseArgs(int argc, char* argv[]) {
     CliConfig cfg;
     cfg.reportFile = juce::File::getCurrentWorkingDirectory().getChildFile("verification_report.md");
+    bool customTargetLufs = false;
 
     for (int i = 1; i < argc; ++i) {
         juce::String arg = argv[i];
@@ -35,31 +36,36 @@ static CliConfig parseArgs(int argc, char* argv[]) {
             cfg.reportFile = juce::File(argv[++i]);
         } else if (arg.startsWith("--target-lufs=")) {
             cfg.targetLUFS = arg.fromFirstOccurrenceOf("--target-lufs=", false, false).getDoubleValue();
+            customTargetLufs = true;
+        } else if (arg.startsWith("-") && arg.length() > 1 && ((arg[1] >= '0' && arg[1] <= '9') || arg[1] == '.')) {
+            cfg.targetLUFS = arg.getDoubleValue();
+            customTargetLufs = true;
         } else if (!arg.startsWith("-")) {
-            if (!cfg.inputFile.exists()) {
-                cfg.inputFile = juce::File(arg);
-            } else if (!cfg.outputFile.exists()) {
-                cfg.outputFile = juce::File(arg);
+            juce::File maybeFile = juce::File::getCurrentWorkingDirectory().getChildFile(arg);
+            if (!cfg.inputFile.existsAsFile()) {
+                cfg.inputFile = maybeFile.existsAsFile() ? maybeFile : juce::File(arg);
+            } else if (!cfg.outputFile.existsAsFile()) {
+                cfg.outputFile = maybeFile.existsAsFile() ? maybeFile : juce::File(arg);
             }
         }
     }
 
     if (cfg.preset == "competitive") {
-        cfg.targetLUFS = -10.0;
+        if (!customTargetLufs) cfg.targetLUFS = -10.0;
         cfg.maxTruePeak = -2.0;
         cfg.minPSR = 8.0;
     } else if (cfg.preset == "dynamic") {
-        cfg.targetLUFS = -16.0;
+        if (!customTargetLufs) cfg.targetLUFS = -16.0;
         cfg.maxTruePeak = -1.0;
         cfg.minPSR = 12.0;
     } else { // "streaming-safe" or "streaming"
         cfg.preset = "streaming-safe";
-        cfg.targetLUFS = -14.0;
+        if (!customTargetLufs) cfg.targetLUFS = -14.0;
         cfg.maxTruePeak = -1.0;
         cfg.minPSR = 10.0;
     }
 
-    if (!cfg.inputFile.exists()) {
+    if (!cfg.inputFile.existsAsFile() && !cfg.inputFile.exists()) {
         cfg.generateFlawed = true;
         cfg.inputFile = juce::File::getCurrentWorkingDirectory().getChildFile("flawed_unmastered_input.wav");
     }
@@ -192,7 +198,7 @@ int main(int argc, char* argv[]) {
     int stepIdx = 0;
 
     // Closed-Loop Optimizer Iterations (Render -> Verify Telemetry -> Adapt Makeup Drive)
-    for (int iter = 0; iter < 2; ++iter) {
+    for (int iter = 0; iter < 3; ++iter) {
         masteredBuffer.makeCopyOf(inputBuffer);
         masterProcessor.resetAnalyzers();
 
@@ -213,14 +219,30 @@ int main(int argc, char* argv[]) {
 
         const auto iterLoudness = masterProcessor.getLoudnessMeter().calculateFinalTelemetry(masterProcessor.getTruePeakMeter().getMaxPeakdBTP());
         const double lufsDelta = cfg.targetLUFS - iterLoudness.integratedLUFS;
+        const double psrDeficit = cfg.minPSR - iterLoudness.minPsrLU;
 
-        if (std::abs(lufsDelta) <= 0.1 || iter == 1) {
+        // Converged if within target loudness tolerance (±0.25 LU) and PSR guard is satisfied
+        if ((std::abs(lufsDelta) <= 0.25 && psrDeficit <= 0.0) || iter == 2) {
             break;
         }
 
-        // Adjust post-gain makeup linear to hit target loudness within 0.1 LU
+        // Adjust post-gain makeup linear to approach target loudness without violating PSR
+        double gainAdjustmentDb = lufsDelta;
+        if (psrDeficit > 0.0) {
+            // Deficit: back off drive
+            gainAdjustmentDb = -psrDeficit - 0.03;
+        } else {
+            // Surplus: do not push gain past available PSR margin
+            const double availablePsrMargin = -psrDeficit; // e.g. 8.13 - 8.0 = +0.13 dB
+            gainAdjustmentDb = std::min(gainAdjustmentDb, std::max(0.0, availablePsrMargin - 0.04));
+        }
+
+        if (std::abs(gainAdjustmentDb) < 0.02) {
+            break;
+        }
+
         const float currentGain = masterProcessor.getMasterChain().getPostGainMakeupLinear();
-        const float adjustedGain = currentGain * static_cast<float>(std::pow(10.0, lufsDelta / 20.0));
+        const float adjustedGain = currentGain * static_cast<float>(std::pow(10.0, gainAdjustmentDb / 20.0));
         masterProcessor.getMasterChain().setPostGainMakeupLinear(adjustedGain);
     }
 
@@ -274,8 +296,8 @@ int main(int argc, char* argv[]) {
           std::to_string(afterTP).substr(0, 5) + " dBTP", afterTP <= cfg.maxTruePeak + 0.05 },
 
         { 4, "Minimum PSR", ">= " + std::to_string(cfg.minPSR).substr(0, 4) + " LU",
-          std::to_string(beforePSR).substr(0, 5) + " LU", beforePSR >= cfg.minPSR - 1.0,
-          std::to_string(afterPSR).substr(0, 5) + " LU", afterPSR >= cfg.minPSR - 1.0 },
+          std::to_string(beforePSR).substr(0, 5) + " LU", beforePSR >= cfg.minPSR,
+          std::to_string(afterPSR).substr(0, 5) + " LU", afterPSR >= cfg.minPSR },
 
         { 5, "Limiter Gain Reduction", "Nominal 1.0-4.0 dB (<= 6.0 dB)",
           "0.0 dB (Bypassed)", true,

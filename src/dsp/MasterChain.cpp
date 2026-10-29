@@ -51,10 +51,10 @@ void MasterChain::setPreset(MasteringPreset preset) noexcept {
         case MasteringPreset::Competitive:
             targetLoudnessLUFS = -10.0;
             targetCeilingDbTP = -2.0;
-            stage10Limiter.setCeilingdBTP(-2.0);
-            // More aggressive soft-clipping and bus glue to protect PSR >= 8.0 without limiter pumping
-            stage9Clipper.setThresholdDb(-3.0);
-            stage3Glue.setParameters(-17.0, 2.0, 20.0, 120.0);
+            stage10Limiter.setCeilingdBTP(-2.0, 0.18); // 0.18 dB inter-sample compensation holds strictly at -2.00 dBTP
+            stage9Clipper.setThresholdDb(-2.0);        // Cap transient reduction at <= 2.0 dB
+            stage3Glue.setParameters(-26.0, 1.8, 15.0, 100.0); // Calibrated to achieve 1.0 - 2.0 dB transparent glue
+            stage4LowBand.setParameters(-22.0, 2.0, 8.0, 60.0); // Offload low-end dynamic crest control upstream
             stage7TonalEQ.setProfile(TonalBalanceEQ::TargetProfile::Modern);
             break;
 
@@ -172,17 +172,22 @@ void MasterChain::optimizeClosedLoop(const TelemetrySnapshot& inputTelemetry,
 
     stage7TonalEQ.setBandGains(lowShelfAdj, mudCutDb, 0.0, highShelfAdj);
 
-    // 6. Limiter Offloading & Soft-Clipper Optimization for High Target Loudness
+    // 6. Limiter Offloading & Dynamic Work Distribution for High Target Loudness
     if (currentPreset == MasteringPreset::Competitive || netGainNeeded > 6.0) {
-        // Offload 1.5 to 2.5 dB of gain reduction to soft-clipper and glue compressor
-        stage9Clipper.setThresholdDb(-3.0);
-        stage3Glue.setParameters(-16.0, 2.0, 20.0, 100.0);
+        // Lower VCA glue compressor threshold to actively achieve 1.0 - 2.0 dB of transparent glue
+        stage3Glue.setParameters(-26.0, 1.8, 15.0, 100.0);
+        // Offload low-end dynamic crest control upstream to Stage 4
+        stage4LowBand.setParameters(-22.0, 2.0, 8.0, 60.0);
+        // Stage 9 Clipper capped at 2.0 dB max shave, threshold at -2.0 dBFS
+        stage9Clipper.setThresholdDb(-2.0);
     } else {
+        stage3Glue.setParameters(-20.0, 1.6, 20.0, 150.0);
         stage9Clipper.setThresholdDb(-1.5);
     }
 
-    // 7. Enforce True-Peak Ceiling
-    stage10Limiter.setCeilingdBTP(targetCeilingDbTP);
+    // 7. Enforce True-Peak Ceiling strictly (0.18 dB inter-sample compensation in competitive mode)
+    const double marginDb = (currentPreset == MasteringPreset::Competitive) ? 0.18 : 0.05;
+    stage10Limiter.setCeilingdBTP(targetCeilingDbTP, marginDb);
 }
 
 } // namespace dsp

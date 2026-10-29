@@ -133,9 +133,16 @@ private:
         const double diff = absX - T;
         const double margin = 1.0 - T;
         const double sat = T + margin * std::tanh(diff / std::max(0.01, margin));
-        const double y = (x >= 0.0) ? sat : -sat;
 
-        const float shaveDb = static_cast<float>(20.0 * std::log10(absX / std::max(1e-6, sat)));
+        // Strict 2.0 dB transient reduction cap:
+        // Capped so the soft clipper never shaves more than 2.0 dB off any transient
+        constexpr double kMinGainLinear = 0.7943282347242815; // 10^(-2.0 / 20.0) = -2.0 dB
+        const double minAllowedSat = absX * kMinGainLinear;
+        const double cappedSat = std::max(sat, minAllowedSat);
+
+        const double y = (x >= 0.0) ? cappedSat : -cappedSat;
+
+        const float shaveDb = static_cast<float>(20.0 * std::log10(absX / std::max(1e-6, cappedSat)));
         if (shaveDb > maxShave) {
             maxShave = shaveDb;
         }

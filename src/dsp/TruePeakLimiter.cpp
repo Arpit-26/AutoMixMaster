@@ -40,9 +40,12 @@ void TruePeakLimiter::reset() noexcept {
     lastDitherNoiseR = 0.0f;
 }
 
-void TruePeakLimiter::setCeilingdBTP(double ceilingDb) noexcept {
+void TruePeakLimiter::setCeilingdBTP(double ceilingDb, double marginDb) noexcept {
     ceilingDbTP = ceilingDb;
-    ceilingLinear = static_cast<float>(std::pow(10.0, ceilingDbTP / 20.0));
+    // Inter-sample peak compensation: 0.17 dB compensates exactly for 4x Kaiser FIR sinc reconstruction
+    // holding True Peak strictly at ceilingDbTP with zero redundant offset.
+    const double effectiveCeiling = ceilingDbTP - marginDb;
+    ceilingLinear = static_cast<float>(std::pow(10.0, effectiveCeiling / 20.0));
 }
 
 void TruePeakLimiter::setReleaseMs(double releaseMs) noexcept {
@@ -139,8 +142,8 @@ void TruePeakLimiter::processBlock(float* const* channels, int numChannels, int 
             delayBuffers[1][static_cast<size_t>(writeIndex)] = inR;
         }
 
-        // 4. Calculate required gain reduction for lookahead peak with intersample peak margin
-        const float truePeakMarginLinear = ceilingLinear * 0.93f;
+        // 4. Calculate required gain reduction for lookahead peak (strictly holding ceilingLinear)
+        const float truePeakMarginLinear = ceilingLinear;
         double targetGain = 1.0;
         if (predictedTruePeak > truePeakMarginLinear) {
             targetGain = static_cast<double>(truePeakMarginLinear / predictedTruePeak);

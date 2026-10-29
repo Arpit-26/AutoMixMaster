@@ -16,14 +16,15 @@ public:
         sampleRate = sRate;
         subsonicHpfL.prepare(sampleRate, 20.0);
         subsonicHpfR.prepare(sampleRate, 20.0);
+        trimGainLinear = 1.0f;
+        preLimitedDetected = false;
         reset();
     }
 
     void reset() noexcept {
         subsonicHpfL.reset();
         subsonicHpfR.reset();
-        trimGainLinear = 1.0f;
-        preLimitedDetected = false;
+        // Note: preserve trimGainLinear and preLimitedDetected across analyzer resets
     }
 
     void setTrimGainLinear(float gain) noexcept {

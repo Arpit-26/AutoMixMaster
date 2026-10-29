@@ -22,7 +22,7 @@ public:
     void prepare(double sampleRate, int numChannels = 2, double lookaheadMs = 5.0);
     void reset() noexcept;
 
-    void setCeilingdBTP(double ceilingDb) noexcept;
+    void setCeilingdBTP(double ceilingDb, double marginDb = 0.0) noexcept;
     void setReleaseMs(double releaseMs) noexcept;
     void setDitherEnabled(bool enabled) noexcept;
 
